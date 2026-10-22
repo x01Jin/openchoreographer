@@ -1,13 +1,31 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
 import { For, Show, createSignal } from "solid-js"
+import { TextAttributes } from "@opentui/core"
 
 type ModelRefLike = { id: string; providerID: string; variant?: string }
 
-type Section = "primary" | "workers" | "reviewers"
+type Section = "primary" | "workers" | "reviewers" | "todos"
+
+type TodoItem = {
+  id?: string
+  content: string
+  status: "pending" | "in_progress" | "completed" | "cancelled"
+  priority?: "high" | "medium" | "low"
+}
 
 const NAME_WIDTH = 15
 const MODEL_WIDTH = 15
+const CONTENT_WIDTH = 30
+const TODO_LIMIT = 12
+
+const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
+
+function normalizeTodoStatus(value: unknown): TodoItem["status"] {
+  return typeof value === "string" && TODO_STATUSES.includes(value)
+    ? (value as TodoItem["status"])
+    : "pending"
+}
 
 function truncate(value: string, width: number): string {
   if (value.length <= width) return value
@@ -55,6 +73,7 @@ export default Plugin.define({
       primary: true,
       workers: true,
       reviewers: false,
+      todos: true,
     })
     const toggle = (section: Section) => setOpen((state) => ({ ...state, [section]: !state[section] }))
 
@@ -77,7 +96,52 @@ export default Plugin.define({
       return result
     }
 
-    const header = (section: Section, title: string, count: () => number) => (
+    const [todosRevision, setTodosRevision] = createSignal(0)
+    let todosSessionID: string | undefined
+    const todosRetried = new Set<string>()
+    let todosRetryTimer: ReturnType<typeof setTimeout> | undefined
+
+    const syncTodos = (sessionID: string) => {
+      const attempt = (mayRetry: boolean) => {
+        void context.data.session.sync(sessionID).then(
+          () => setTodosRevision((revision) => revision + 1),
+          () => {
+            if (!mayRetry || todosRetried.has(sessionID)) return
+            todosRetried.add(sessionID)
+            todosRetryTimer = setTimeout(() => attempt(false), 500)
+          },
+        )
+      }
+      attempt(true)
+    }
+
+    const todoItems = (sessionID: string): TodoItem[] => {
+      todosRevision()
+      if (todosSessionID !== sessionID) {
+        todosSessionID = sessionID
+        syncTodos(sessionID)
+      }
+      const raw = context.data.session.get(sessionID)?.metadata?.["openchoreographer.todos"]
+      if (!Array.isArray(raw)) return []
+      const items: TodoItem[] = []
+      for (const entry of raw) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
+        const record = entry as Record<string, unknown>
+        const content = record.content
+        if (typeof content !== "string") continue
+        items.push({
+          id: typeof record.id === "string" ? record.id : undefined,
+          content,
+          status: normalizeTodoStatus(record.status),
+        })
+      }
+      return items
+    }
+
+    const todoDone = (sessionID: string) =>
+      todoItems(sessionID).filter((item) => item.status === "completed" || item.status === "cancelled").length
+
+    const header = (section: Section, title: string, count: () => string | number) => (
       <box
         width="100%"
         onMouseDown={(event) => {
@@ -85,7 +149,7 @@ export default Plugin.define({
           toggle(section)
         }}
       >
-        <text fg={context.theme.text.base} selectable={false}>
+        <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>
           {`${open()[section] ? "▾" : "▸"} ${title} ${count()}`}
         </text>
       </box>
@@ -148,11 +212,38 @@ export default Plugin.define({
       )
     }
 
+    const todoRow = (item: TodoItem) => {
+      const done = item.status === "completed" || item.status === "cancelled"
+      const marker =
+        item.status === "completed"
+          ? "✓ "
+          : item.status === "cancelled"
+            ? "✕ "
+            : item.status === "in_progress"
+              ? "● "
+              : "○ "
+      const color = done
+        ? context.theme.text.faint
+        : item.status === "in_progress"
+          ? context.theme.text.base
+          : context.theme.text.muted
+      return (
+        <box flexDirection="row" width="100%" columnGap={1}>
+          <text wrapMode="none" flexShrink={0} fg={color} selectable={false}>
+            {marker}
+          </text>
+          <text wrapMode="word" flexShrink={1} minWidth={0} fg={color} selectable={false}>
+            {item.content}
+          </text>
+        </box>
+      )
+    }
+
     const unregister = context.ui.slot({
       append: "sidebar.content",
       render: ({ sessionID }) => (
         <box flexDirection="column" gap={1} width="100%">
-          <text fg={context.theme.text.base} selectable={false}>AGENTS & MODELS</text>
+          <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>AGENTS & MODELS</text>
           <box flexDirection="column" width="100%">
             {header("primary", "PRIMARY", () => primary().length)}
             <Show when={open().primary}>
@@ -173,8 +264,16 @@ export default Plugin.define({
           </box>
           <Show when={running(sessionID).length > 0}>
             <box flexDirection="column" width="100%">
-              <text fg={context.theme.text.muted} selectable={false}>{`RUNNING ${running(sessionID).length}`}</text>
+              <text fg={context.theme.text.muted} selectable={false} attributes={TextAttributes.BOLD}>{`RUNNING ${running(sessionID).length}`}</text>
               <For each={running(sessionID)}>{(session) => runningRow(session)}</For>
+            </box>
+          </Show>
+          <Show when={todoItems(sessionID).length > 0}>
+            <box flexDirection="column" width="100%">
+              {header("todos", "TODOS", () => `${todoDone(sessionID)}/${todoItems(sessionID).length}`)}
+              <Show when={open().todos}>
+                <For each={todoItems(sessionID).slice(0, TODO_LIMIT)}>{(item) => todoRow(item)}</For>
+              </Show>
             </box>
           </Show>
         </box>
@@ -190,10 +289,16 @@ export default Plugin.define({
       void context.data.location.model.sync(location).catch(() => undefined)
     })
 
+    const offTodos = context.data.on("session.metadata.updated", (event) => {
+      if (todosSessionID && event.data.sessionID === todosSessionID) syncTodos(todosSessionID)
+    })
+
     return () => {
       unregister()
       offAgent()
       offModel()
+      offTodos()
+      if (todosRetryTimer !== undefined) clearTimeout(todosRetryTimer)
     }
   },
 })
