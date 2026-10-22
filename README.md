@@ -123,6 +123,6 @@ npm run dry-run
 
 ## Troubleshooting
 
-- Missing agent definitions: the plugin throws at setup naming them. Re-run the installer with `--force`, then restart.
+- Missing agent definitions: the plugin logs a warning naming the unregistered agents and still loads. Re-run `node bin/install.mjs --force`, then restart OpenCode.
 - Sidebar empty: the TUI half failed to resolve `solid-js`. Re-run the installer without `--no-deps`.
 - Commands registered twice: two copies of the plugin are loaded. Remove one.

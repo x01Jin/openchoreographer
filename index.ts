@@ -105,7 +105,7 @@ function countTodos(list: TodoItem[]): TodoCounts {
 }
 
 export default Plugin.define({
-  id: "orchestrator",
+  id: "openchoreographer",
   async setup(ctx) {
     const generation = ++epoch
     const previous = active
@@ -117,9 +117,9 @@ export default Plugin.define({
       const listed = await ctx.agent.list({}).catch(() => undefined)
       if (listed) {
         const ids = listed.data.map((agent) => agent.id)
-        const missing = AGENT_IDS.filter((id) => !ids.includes(id))
+        const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id)) : []
         if (missing.length > 0) {
-          throw new Error("openchoreographer: missing agent definitions: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
+          console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
         }
       } else {
         console.warn("openchoreographer: agent list unavailable, skipping setup validation")

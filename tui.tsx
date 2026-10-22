@@ -52,7 +52,7 @@ function modelName(ref: ModelRefLike, models: ModelInfo[]): string {
 }
 
 export default Plugin.define({
-  id: "orchestrator.tui",
+  id: "openchoreographer.tui",
   async setup(context) {
     const location = context.location ?? context.data.location.default()
 
