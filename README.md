@@ -1,4 +1,4 @@
-# Orchestrator plugin
+# openchoreographer
 
 Ships a read-only orchestrator agent, worker and reviewer agents, two commands, and a sidebar roster for OpenCode V2.
 
@@ -8,10 +8,12 @@ Primary install (private GitHub repo):
 
 ```sh
 opencode plugin add github:x01Jin/openchoreographer
-git clone git@github.com:x01Jin/openchoreographer.git
+gh repo clone x01Jin/openchoreographer
 cd openchoreographer
 node bin/install.mjs
 ```
+
+For a private repo this uses your existing Git credentials. If that fails, use `opencode plugin add git+ssh://git@github.com/x01Jin/openchoreographer.git` with SSH access configured.
 
 `opencode plugin add` installs the plugin. The clone plus `node bin/install.mjs` installs the 18 agent files without copying the plugin again.
 
@@ -22,7 +24,7 @@ This places the 18 bundled agent definitions (`orchestrator.md`, `frontend.md`, 
 Offline/local alternative from a clone:
 
 ```sh
-git clone git@github.com:x01Jin/openchoreographer.git
+gh repo clone x01Jin/openchoreographer
 cd openchoreographer
 node bin/install.mjs --local
 ```
@@ -34,8 +36,8 @@ Run `node bin/install.mjs ...` from the `openchoreographer/` package directory, 
 Project-local:
 
 ```sh
-npx openchoreographer --project
-# or from a clone (run from the `openchoreographer/` package directory, or use the absolute script path):
+gh repo clone x01Jin/openchoreographer
+cd openchoreographer
 node bin/install.mjs --project
 ```
 
@@ -45,7 +47,7 @@ Manual install: copy `agents/*.md` into `~/.config/opencode/agents/` and add `"o
 
 The installer is needed because OpenCode cannot create agents at runtime, so the Markdown definitions have to be placed on disk.
 
-Installer flags: `--local`, `--project` (implies local plugin copy; `--local` and `--project` are mutually exclusive), `--force` (overwrite existing files without a backup, otherwise existing files are skipped), `--dry-run` (print planned paths, write nothing), `--no-agents` (skips writing agent files, including the plugin's bundled copy). `init` may be passed as a positional argument and is ignored, so `npx openchoreographer init` works. Set `OPENCODE_CONFIG_DIR` to an absolute path to override the global config directory (`~/.config/opencode` by default).
+Installer flags: `--local`, `--project` (implies local plugin copy; `--local` and `--project` are mutually exclusive), `--force` (overwrite existing files without a backup, otherwise existing files are skipped), `--dry-run` (print planned paths, write nothing), `--no-agents` (skips writing agent files, including the plugin's bundled copy). `init` may be passed as a positional argument and is ignored, so `node bin/install.mjs init` works. Set `OPENCODE_CONFIG_DIR` to an absolute path to override the global config directory (`~/.config/opencode` by default).
 
 Publishing:
 

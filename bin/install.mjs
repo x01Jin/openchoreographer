@@ -5,10 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_DIR_NAME = "openchoreographer";
+const GITHUB_REPO = "x01Jin/openchoreographer";
 const PLUGIN_FILES = ["index.ts", "tui.tsx", "package.json", "README.md", "LICENSE"];
 
 function printUsage() {
-  console.log(`Usage: npx ${PLUGIN_DIR_NAME} [init] [options]
+  console.log(`Usage: node bin/install.mjs [init] [options]
 
 Install the bundled agent definitions and optionally the plugin files.
 
@@ -21,10 +22,10 @@ Options:
   -h, --help   Show this help
 
 Examples:
-  npx ${PLUGIN_DIR_NAME}
-  npx ${PLUGIN_DIR_NAME} init
+  node bin/install.mjs
+  node bin/install.mjs init
   node bin/install.mjs --local
-  npx ${PLUGIN_DIR_NAME} --project --force`);
+  node bin/install.mjs --project --force`);
 }
 
 function parseArgs(argv) {
@@ -377,7 +378,7 @@ function main() {
   if (copyPlugin) {
     console.log("  1. Restart OpenCode; the local plugin is already in place.");
   } else {
-    console.log(`  1. Install the plugin: opencode plugin add ${PLUGIN_DIR_NAME}`);
+    console.log(`  1. Install the plugin: opencode plugin add github:${GITHUB_REPO}`);
   }
   console.log("  2. Restart OpenCode (or run: opencode service restart)");
   console.log("  3. Run /orchestrate in a session");
