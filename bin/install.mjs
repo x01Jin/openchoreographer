@@ -20,7 +20,8 @@ const RETIRED_AGENT_FILES = [
   "reviewer-performance.md",
   "reviewer-testing.md",
 ];
-const DEP_ARGS = ["install", "--omit=dev", "--no-audit", "--no-fund"];
+const DEP_ARGS = ["install", "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts"];
+const NPM_CLI = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
 
 /** @param {unknown} err @returns {string} */
 function errorMessage(err) {
@@ -33,7 +34,7 @@ function isErrnoCode(err, code) {
 }
 
 /**
- * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
+ * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
  * @typedef {"installed" | "overwrote" | "same" | "stale" | "skipped"} CopyStatus
  * @typedef {{ force: boolean, dryRun: boolean }} CopyOptions
  * @typedef {{ installed: number, overwrote: number, same: number, stale: number, skipped: number }} CopyCounts
@@ -58,6 +59,7 @@ Options:
   --dry-run    Print planned paths and actions; write nothing
   --no-agents  Skip agent installation
   --no-deps    Skip npm install in the copied plugin directory
+  --no-plugin  Install only the agent definitions; skip copying plugin files
   --version    Print the installer version
   -h, --help   Show this help
 
@@ -68,6 +70,7 @@ Exit codes:
 
 Examples:
   node bin/install.mjs
+  node bin/install.mjs --no-plugin
   node bin/install.mjs init
   node bin/install.mjs --local
   node bin/install.mjs --project --force`);
@@ -79,7 +82,7 @@ Examples:
  */
 function parseArgs(argv) {
   /** @type {InstallOpts} */
-  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, prune: false, help: false, version: false };
+  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, noPlugin: false, prune: false, help: false, version: false };
   /** @type {string[]} */
   const unknown = [];
   let args = argv;
@@ -93,6 +96,7 @@ function parseArgs(argv) {
     else if (arg === "--dry-run") opts.dryRun = true;
     else if (arg === "--no-agents") opts.noAgents = true;
     else if (arg === "--no-deps") opts.noDeps = true;
+    else if (arg === "--no-plugin") opts.noPlugin = true;
     else if (arg === "--prune") opts.prune = true;
     else if (arg === "--version") opts.version = true;
     else if (arg === "--help" || arg === "-h") opts.help = true;
@@ -317,7 +321,7 @@ function main() {
   }
 
   const isProject = opts.project;
-  const copyPlugin = opts.local || opts.project;
+  const copyPlugin = (opts.local || opts.project) && !opts.noPlugin;
 
   let globalConfigDir = "";
   if (!isProject) {
@@ -494,7 +498,9 @@ function main() {
     } else if (opts.noDeps) {
       console.log("Skipping npm install (--no-deps).");
     } else {
-      const result = spawnSync("npm", DEP_ARGS, { cwd: pluginTarget, stdio: "inherit", shell: process.platform === "win32" });
+      const result = fs.existsSync(NPM_CLI)
+        ? spawnSync(process.execPath, [NPM_CLI, ...DEP_ARGS], { cwd: pluginTarget, stdio: "inherit" })
+        : spawnSync("npm", DEP_ARGS, { cwd: pluginTarget, stdio: "inherit", shell: process.platform === "win32" });
       if (result.error || result.status !== 0) {
         console.error(`Dependency install failed: ${depCommand} (cwd: ${pluginTarget}). The install is incomplete; fix npm and re-run.`);
         process.exitCode = 1;
@@ -529,6 +535,8 @@ function main() {
   }
   if (copyPlugin) {
     printSummary("Plugin", pluginTarget, pluginCounts, opts.dryRun, pluginPruned);
+  } else if (opts.noPlugin) {
+    console.log("Plugin: not copied (--no-plugin); the npm or GitHub package supplies it.");
   } else {
     console.log("Plugin: not copied (use --local or --project to copy it).");
   }

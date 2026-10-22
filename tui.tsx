@@ -39,9 +39,14 @@ function createSegmenter(): GraphemeSegmenter | undefined {
 
 const segmenter = createSegmenter()
 
+function sanitize(value: string): string {
+  return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+}
+
 function truncate(value: string, width: number): string {
-  const cells = segmenter ? Array.from(segmenter.segment(value), (part) => part.segment) : Array.from(value)
-  if (cells.length <= width) return value
+  const clean = sanitize(value)
+  const cells = segmenter ? Array.from(segmenter.segment(clean), (part) => part.segment) : Array.from(clean)
+  if (cells.length <= width) return clean
   return cells.slice(0, Math.max(1, width - 1)).join("") + "…"
 }
 
@@ -164,7 +169,7 @@ export default Plugin.define({
         if (typeof content !== "string") continue
         items.push({
           id: typeof record.id === "string" ? record.id : undefined,
-          content,
+          content: sanitize(content),
           status: normalizeTodoStatus(record.status),
         })
       }

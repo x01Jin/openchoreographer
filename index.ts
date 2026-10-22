@@ -27,6 +27,9 @@ function validateDiffInput(input: unknown): ValidatedDiffInput {
     typeof rawContext === "number" && Number.isFinite(rawContext) ? Math.min(10, Math.max(0, Math.floor(rawContext))) : 3
   const rawBase = record.base
   const trimmedBase = typeof rawBase === "string" ? rawBase.trim() : ""
+  if (trimmedBase && (/^[-]/.test(trimmedBase) || /[\s\x00-\x1F\x7F-\x9F]/.test(trimmedBase))) {
+    throw new TypeError('diff: invalid "base": refs cannot start with "-" or contain whitespace')
+  }
   const base = trimmedBase ? trimmedBase : undefined
   const rawPath = record.path
   const trimmedPath = typeof rawPath === "string" ? rawPath.trim() : ""
@@ -88,7 +91,7 @@ function parseTodos(raw: unknown): TodoItem[] {
     if (item.content.length > 500) throw new Error(`todowrite: item ${index} "content" is too long (${item.content.length} chars); the limit is 500`)
     if (typeof item.status !== "string" || !STATUSES.includes(item.status as TodoStatus)) throw new Error(`todowrite: item ${index} has invalid "status": ${JSON.stringify(item.status)}`)
     if (item.priority !== undefined && (typeof item.priority !== "string" || !PRIORITIES.includes(item.priority as TodoPriority))) throw new Error(`todowrite: item ${index} has invalid "priority": ${JSON.stringify(item.priority)}`)
-    if (item.id !== undefined && (typeof item.id !== "string" || !item.id)) throw new Error(`todowrite: item ${index} has invalid "id"`)
+    if (item.id !== undefined && (typeof item.id !== "string" || !item.id || item.id.length > 64)) throw new Error(`todowrite: item ${index} has invalid "id"`)
     return {
       id: typeof item.id === "string" ? item.id : `todo-${todoSeq++}`,
       content: item.content,
@@ -142,8 +145,11 @@ export default Plugin.define({
             },
             options: { permission: "read" },
             execute: async (input) => {
-              const { mode, base, context, path } = validateDiffInput(input)
+              let mode: ValidatedDiffInput["mode"] = "working"
               try {
+                const validated = validateDiffInput(input)
+                mode = validated.mode
+                const { base, context, path } = validated
                 const { data } = await ctx.vcs.diff({ mode, base, context })
                 const needle = path
                 const scoped = needle ? data.filter((entry) => entry.file.includes(needle)) : data
@@ -153,13 +159,20 @@ export default Plugin.define({
                   }
                   return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode } }
                 }
-                let text = scoped
-                  .map((entry) => {
-                    const file = entry.file.replace(/[\u0000-\u001F\u007F]/g, " ")
-                    const patch = entry.patch.replace(/\u001B\[[0-9;]*m/g, "")
-                    return `${file} (${entry.status} +${entry.additions} -${entry.deletions})\n${patch}`
-                  })
-                  .join("\n\n")
+                const blocks = scoped.map((entry) => {
+                  const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+                  const patch = entry.patch.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
+                  return `${file} (${entry.status} +${entry.additions} -${entry.deletions})\n${patch}`
+                })
+                const total = blocks.reduce((sum, block) => sum + block.length, 0) + (blocks.length > 1 ? (blocks.length - 1) * 2 : 0)
+                const kept: string[] = []
+                let keptLength = 0
+                for (const block of blocks) {
+                  kept.push(block)
+                  keptLength += block.length + (kept.length > 1 ? 2 : 0)
+                  if (keptLength > MAX_DIFF_CHARS) break
+                }
+                let text = kept.join("\n\n")
                 if (text.length > MAX_DIFF_CHARS) {
                   let cut = text.lastIndexOf("\n", MAX_DIFF_CHARS)
                   if (cut < 0) cut = MAX_DIFF_CHARS
@@ -168,7 +181,6 @@ export default Plugin.define({
                     if (low >= 0xd800 && low <= 0xdbff) cut -= 1
                   }
                   const shown = cut
-                  const total = text.length
                   text = text.slice(0, cut) + `\n… truncated at 60000 chars (showing ${shown} of ${total}); pass path to narrow, or base to compare against another ref`
                   return { content: text, metadata: { files: scoped.length, mode, truncated: true, total } }
                 }

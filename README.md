@@ -5,30 +5,32 @@ A read-only orchestrator, nine specialist agents, and a collapsible agent roster
 ## Install
 
 ```sh
-opencode plugin add github:x01Jin/openchoreographer
+opencode plugin add openchoreographer
+npx openchoreographer --no-plugin
 ```
 
-Restart OpenCode after adding.
+The first command registers the plugin. The second writes the nine agent definitions into `~/.config/opencode/agents/` — OpenCode cannot create agents at runtime, so the Markdown files have to be on disk — and `--no-plugin` stops the installer from copying a second copy of the plugin into `~/.config/opencode/plugins/`. Restart OpenCode afterwards.
 
-Or from a clone:
+From a clone, or to pin a commit:
 
 ```sh
 gh repo clone x01Jin/openchoreographer
 cd openchoreographer
-node bin/install.mjs
+node bin/install.mjs --no-plugin
+opencode plugin add github:x01Jin/openchoreographer
 ```
 
-This writes the nine agent definitions into `~/.config/opencode/agents/`. The installer is needed because OpenCode cannot create agents at runtime, so the Markdown files have to be on disk.
+Requires OpenCode V2 (plugin API 2.1.x) and Node 22.6+ for the installer.
 
-Flags: `--local` copies the plugin plus agents into the global config dir; `--project` installs into `<project>/.opencode/`; `--force` overwrites changed files; `--prune` deletes retired agent files in the target directory and requires `--force`; `--dry-run` prints what would happen and writes nothing; `--no-agents` skips agent files; `--no-deps` skips the dependency install; `--version` prints the installer version. `--local` and `--project` are mutually exclusive.
+Flags: `--local` copies the plugin plus agents into the global config dir; `--project` installs into `<project>/.opencode/`; `--force` overwrites changed files; `--prune` deletes retired agent files in the target directory and requires `--force`; `--dry-run` prints what would happen and writes nothing; `--no-agents` skips agent files; `--no-deps` skips the dependency install; `--no-plugin` installs only the agent definitions and skips copying plugin files; `--version` prints the installer version. `--local` and `--project` are mutually exclusive.
 
-The installer compares file content. Identical files report `same`. Files that differ without `--force` are skipped and listed as `stale`; everything else is still written, and the process exits 2 so a script can detect an incomplete upgrade. So the upgrade path is `git pull && node bin/install.mjs --force`.
+The installer compares file content. Identical files report `same`. Files that differ without `--force` are skipped and listed as `stale`; everything else is still written, and the process exits 2 so a script can detect an incomplete upgrade. For a clone the upgrade path is `git pull && node bin/install.mjs --force`; for the npm package run `opencode plugin update`, then `npx openchoreographer --force`.
 
 Upgrading from the eighteen-agent layout copies the nine but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about; the `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
 
 `--local` and `--project` run `npm install --omit=dev` in the copied plugin directory, because `tui.tsx` has runtime imports (`solid-js`, `@opentui/*`) that a copied directory cannot resolve on its own. `--no-deps` skips this, at the cost of the sidebar failing to load.
 
-Do not load a local copy and the GitHub package at once. Two copies register the commands and the sidebar twice.
+Do not load a local copy and the npm or GitHub package at once. Two copies register the commands and the sidebar twice.
 
 ## What it does
 
