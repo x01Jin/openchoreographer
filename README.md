@@ -57,7 +57,7 @@ npm publishing is optional; the package name is `openchoreographer`.
 npm publish --access public
 ```
 
-Pin `@opencode/plugin` to the OpenCode version you target before publishing, instead of `latest`.
+`@opencode/plugin` is pinned to the OpenCode version this package targets (`2.1.3`). Bump it, together with the type-only dev dependencies, when you move to a newer OpenCode release.
 
 ## What it does
 
@@ -124,3 +124,16 @@ opencode run --agent orchestrator --auto "Add a retry with backoff to the upload
 If `default_agent` is set to `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default. Use `/orchestrate` to switch an existing session. Use `/review-panel` for a strict review of the current changes.
 
 The orchestrator reads and searches, then delegates edits and commands to workers. Reviewers are read-only.
+
+## Development
+
+`npm install` brings in type-only dev dependencies: `@opencode/client`, `@opentui/core`, `@opentui/solid`, `solid-js`, and `@types/node`. Consumers of the plugin never install them.
+
+```sh
+npm install
+npx tsc --noEmit
+```
+
+`tsconfig.json` checks `index.ts`, `tui.tsx`, and `bin/install.mjs` under `strict`. It uses `moduleResolution: "bundler"` because the OpenCode and OpenTUI types sit behind `exports` conditions, and `jsxImportSource: "@opentui/solid"` so TSX is checked against OpenTUI's element types rather than React's.
+
+`@opentui/core` declares `engines.node >= 26.4.0` for its own runtime. On older Node, `npm install` prints an `EBADENGINE` warning. It is harmless for this package: nothing executes OpenTUI here, `tsc` reads only its declarations, and `bin/install.mjs` copies a fixed file list.

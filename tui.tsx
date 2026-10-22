@@ -85,7 +85,7 @@ export default Plugin.define({
           toggle(section)
         }}
       >
-        <text fg={context.theme.text.faint} selectable={false}>
+        <text fg={context.theme.text.base} selectable={false}>
           {`${open()[section] ? "▾" : "▸"} ${title} ${count()}`}
         </text>
       </box>
@@ -106,14 +106,14 @@ export default Plugin.define({
             </text>
             <text
               wrapMode="none"
-              fg={active() ? (agent.color ?? context.theme.text.base) : context.theme.text.muted}
+              fg={agent.color ?? context.theme.text.base}
               selectable={false}
             >
               {truncate(agent.name, NAME_WIDTH)}
             </text>
           </box>
           <box flexShrink={0}>
-            <text wrapMode="none" fg={context.theme.text.faint} selectable={false}>
+            <text wrapMode="none" fg={active() ? context.theme.text.muted : context.theme.text.faint} selectable={false}>
               {truncate(activeModel(agent, sessionID), MODEL_WIDTH)}
             </text>
           </box>
@@ -140,7 +140,7 @@ export default Plugin.define({
             </text>
           </box>
           <box flexShrink={0}>
-            <text wrapMode="none" fg={context.theme.text.faint} selectable={false}>
+            <text wrapMode="none" fg={context.theme.text.muted} selectable={false}>
               {truncate(model, MODEL_WIDTH)}
             </text>
           </box>
@@ -152,7 +152,7 @@ export default Plugin.define({
       append: "sidebar.content",
       render: ({ sessionID }) => (
         <box flexDirection="column" gap={1} width="100%">
-          <text fg={context.theme.text.muted} selectable={false}>AGENTS & MODELS</text>
+          <text fg={context.theme.text.base} selectable={false}>AGENTS & MODELS</text>
           <box flexDirection="column" width="100%">
             {header("primary", "PRIMARY", () => primary().length)}
             <Show when={open().primary}>
@@ -173,7 +173,7 @@ export default Plugin.define({
           </box>
           <Show when={running(sessionID).length > 0}>
             <box flexDirection="column" width="100%">
-              <text fg={context.theme.text.faint} selectable={false}>{`RUNNING ${running(sessionID).length}`}</text>
+              <text fg={context.theme.text.muted} selectable={false}>{`RUNNING ${running(sessionID).length}`}</text>
               <For each={running(sessionID)}>{(session) => runningRow(session)}</For>
             </box>
           </Show>

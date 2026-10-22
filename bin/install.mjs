@@ -8,6 +8,16 @@ const PLUGIN_DIR_NAME = "openchoreographer";
 const GITHUB_REPO = "x01Jin/openchoreographer";
 const PLUGIN_FILES = ["index.ts", "tui.tsx", "package.json", "README.md", "LICENSE"];
 
+/** @param {unknown} err @returns {string} */
+function errorMessage(err) {
+  return err instanceof Error ? err.message || String(err) : String(err);
+}
+
+/** @param {unknown} err @param {string} code @returns {boolean} */
+function isErrnoCode(err, code) {
+  return typeof err === "object" && err !== null && "code" in err && err.code === code;
+}
+
 function printUsage() {
   console.log(`Usage: node bin/install.mjs [init] [options]
 
@@ -28,6 +38,7 @@ Examples:
   node bin/install.mjs --project --force`);
 }
 
+/** @param {string[]} argv */
 function parseArgs(argv) {
   const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, help: false };
   const unknown = [];
@@ -70,7 +81,7 @@ function main() {
   const isProject = opts.project;
   const copyPlugin = opts.local || opts.project;
 
-  let globalConfigDir;
+  let globalConfigDir = "";
   if (!isProject) {
     const rawConfigDir = process.env.OPENCODE_CONFIG_DIR;
     if (rawConfigDir) {
@@ -97,6 +108,7 @@ function main() {
     console.log(`Project root: ${projectRoot}`);
   }
 
+  /** @type {string[]} */
   let agentSources = [];
   if (!opts.noAgents) {
     try {
@@ -104,7 +116,7 @@ function main() {
         .filter((f) => f.endsWith(".md"))
         .sort();
     } catch (err) {
-      console.error(`Failed to read bundled agents directory: ${bundledAgentsDir}\n${err.message}`);
+      console.error(`Failed to read bundled agents directory: ${bundledAgentsDir}\n${errorMessage(err)}`);
       process.exitCode = 1;
       return;
     }
@@ -118,7 +130,7 @@ function main() {
       try {
         st = fs.lstatSync(path.join(bundledAgentsDir, name));
       } catch (err) {
-        console.error(`Failed to inspect bundled agent: ${name}\n${err.message}`);
+        console.error(`Failed to inspect bundled agent: ${name}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
@@ -135,13 +147,14 @@ function main() {
   let installedPlugin = 0;
   let skippedPlugin = 0;
 
+  /** @param {string} dest */
   function refuseIfSymlink(dest) {
     let st;
     try {
       st = fs.lstatSync(dest);
     } catch (err) {
-      if (err && err.code === "ENOENT") return false;
-      console.error(`Failed to inspect destination: ${dest}\n${err.message}`);
+      if (isErrnoCode(err, "ENOENT")) return false;
+      console.error(`Failed to inspect destination: ${dest}\n${errorMessage(err)}`);
       process.exitCode = 1;
       return true;
     }
@@ -153,13 +166,14 @@ function main() {
     return false;
   }
 
+  /** @param {string} file */
   function isRegularFile(file) {
     try {
       const st = fs.lstatSync(file);
       return st.isFile() && !st.isSymbolicLink();
     } catch (err) {
-      if (err && err.code === "ENOENT") return false;
-      console.error(`Failed to inspect destination: ${file}\n${err.message}`);
+      if (isErrnoCode(err, "ENOENT")) return false;
+      console.error(`Failed to inspect destination: ${file}\n${errorMessage(err)}`);
       process.exitCode = 1;
       return false;
     }
@@ -171,7 +185,7 @@ function main() {
       try {
         fs.mkdirSync(agentsTarget, { recursive: true });
       } catch (err) {
-        console.error(`Failed to create agents directory: ${agentsTarget}\n${err.message}`);
+        console.error(`Failed to create agents directory: ${agentsTarget}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
@@ -207,7 +221,7 @@ function main() {
         installedAgents++;
         console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
       } catch (err) {
-        console.error(`Failed to copy ${src} -> ${dest}\n${err.message}`);
+        console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
@@ -228,7 +242,7 @@ function main() {
         }
         fs.mkdirSync(pluginBinDir, { recursive: true });
       } catch (err) {
-        console.error(`Failed to create plugin directory: ${pluginTarget}\n${err.message}`);
+        console.error(`Failed to create plugin directory: ${pluginTarget}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
@@ -273,7 +287,7 @@ function main() {
         installedPlugin++;
         console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
       } catch (err) {
-        console.error(`Failed to copy ${src} -> ${dest}\n${err.message}`);
+        console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
@@ -310,7 +324,7 @@ function main() {
           installedPlugin++;
           console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
         } catch (err) {
-          console.error(`Failed to copy ${src} -> ${dest}\n${err.message}`);
+          console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
           process.exitCode = 1;
           return;
         }
@@ -347,7 +361,7 @@ function main() {
           installedPlugin++;
           console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
         } catch (err) {
-          console.error(`Failed to copy ${src} -> ${dest}\n${err.message}`);
+          console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
           process.exitCode = 1;
           return;
         }
@@ -389,6 +403,6 @@ function main() {
 try {
   main();
 } catch (err) {
-  console.error(`Install failed: ${err && err.message ? err.message : err}`);
+  console.error(`Install failed: ${errorMessage(err)}`);
   process.exitCode = 1;
 }
