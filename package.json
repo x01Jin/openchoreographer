@@ -1,0 +1,41 @@
+{
+  "name": "openchoreographer",
+  "version": "0.1.0",
+  "description": "Read-only orchestrator, worker and reviewer agents, and a collapsible agent/model sidebar for OpenCode V2.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./tui": "./tui.tsx",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.ts",
+    "tui.tsx",
+    "agents",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "openchoreographer": "./bin/install.mjs"
+  },
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.6",
+    "@opentui/solid": ">=0.6.6",
+    "solid-js": ">=1.9.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "orchestrator",
+    "subagents",
+    "tui"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
