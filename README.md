@@ -1,98 +1,86 @@
 # openchoreographer
 
-Ships a read-only orchestrator agent, worker and reviewer agents, two commands, and a sidebar roster for OpenCode V2.
+A read-only orchestrator, nine specialist agents, and a collapsible agent roster for OpenCode V2.
 
 ## Install
 
-Primary install (private GitHub repo):
-
 ```sh
 opencode plugin add github:x01Jin/openchoreographer
+```
+
+Restart OpenCode after adding.
+
+Or from a clone:
+
+```sh
 gh repo clone x01Jin/openchoreographer
 cd openchoreographer
 node bin/install.mjs
 ```
 
-For a private repo this uses your existing Git credentials. If that fails, use `opencode plugin add git+ssh://git@github.com/x01Jin/openchoreographer.git` with SSH access configured.
+This writes the nine agent definitions into `~/.config/opencode/agents/`. The installer is needed because OpenCode cannot create agents at runtime, so the Markdown files have to be on disk.
 
-`opencode plugin add` installs the plugin. The clone plus `node bin/install.mjs` installs the 18 agent files without copying the plugin again.
+Flags: `--local` copies the plugin plus agents into the global config dir; `--project` installs into `<project>/.opencode/`; `--force` overwrites changed files; `--prune` deletes retired agent files in the target directory and requires `--force`; `--dry-run` prints what would happen and writes nothing; `--no-agents` skips agent files; `--no-deps` skips the dependency install; `--version` prints the installer version. `--local` and `--project` are mutually exclusive.
 
-Do not load both a local copy and the GitHub package. Two copies register the commands and sidebar twice. Remove the local entry from `plugins` before switching.
+The installer compares file content. Identical files report `same`. Files that differ without `--force` are skipped and listed as `stale`; everything else is still written, and the process exits 2 so a script can detect an incomplete upgrade. So the upgrade path is `git pull && node bin/install.mjs --force`.
 
-This places the 18 bundled agent definitions (`orchestrator.md`, `frontend.md`, `backend.md`, `database.md`, `devops.md`, `tester.md`, and the 12 `reviewer-*.md` files) into `~/.config/opencode/agents/`. Then restart OpenCode.
+Upgrading from the eighteen-agent layout copies the nine but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about; the `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
 
-Offline/local alternative from a clone:
+`--local` and `--project` run `npm install --omit=dev` in the copied plugin directory, because `tui.tsx` has runtime imports (`solid-js`, `@opentui/*`) that a copied directory cannot resolve on its own. `--no-deps` skips this, at the cost of the sidebar failing to load.
 
-```sh
-gh repo clone x01Jin/openchoreographer
-cd openchoreographer
-node bin/install.mjs --local
-```
-
-`--local` copies both the plugin and the agents, so do not combine it with `opencode plugin add`.
-
-Run `node bin/install.mjs ...` from the `openchoreographer/` package directory, or pass the absolute path to the script. This copies the plugin files (`index.ts`, `tui.tsx`, `package.json`, `README.md`, `LICENSE`, `agents/`, `bin/install.mjs`) into `~/.config/opencode/plugins/openchoreographer/` and installs the agents globally. No registry access needed after the clone.
-
-Project-local:
-
-```sh
-gh repo clone x01Jin/openchoreographer
-cd openchoreographer
-node bin/install.mjs --project
-```
-
-This copies the plugin files into `<project>/.opencode/plugins/openchoreographer/` and the agents into `<project>/.opencode/agents/`.
-
-Manual install: copy `agents/*.md` into `~/.config/opencode/agents/` and add `"openchoreographer"` to `plugins` in `opencode.jsonc`, or copy the whole package folder to `~/.config/opencode/plugins/openchoreographer/`.
-
-The installer is needed because OpenCode cannot create agents at runtime, so the Markdown definitions have to be placed on disk.
-
-Installer flags: `--local`, `--project` (implies local plugin copy; `--local` and `--project` are mutually exclusive), `--force` (overwrite existing files without a backup, otherwise existing files are skipped), `--dry-run` (print planned paths, write nothing), `--no-agents` (skips writing agent files, including the plugin's bundled copy). `init` may be passed as a positional argument and is ignored, so `node bin/install.mjs init` works. Set `OPENCODE_CONFIG_DIR` to an absolute path to override the global config directory (`~/.config/opencode` by default).
-
-Publishing:
-
-npm publishing is optional; the package name is `openchoreographer`.
-
-```sh
-npm publish --access public
-```
-
-`@opencode/plugin` is pinned to the OpenCode version this package targets (`2.1.3`). Bump it, together with the type-only dev dependencies, when you move to a newer OpenCode release.
+Do not load a local copy and the GitHub package at once. Two copies register the commands and the sidebar twice.
 
 ## What it does
 
-- Registers `/orchestrate` and `/review-panel` commands.
-- Keeps the orchestrator from editing files or running shell commands.
-- Adds a sidebar section with collapsible PRIMARY, WORKERS, and REVIEWERS groups, each agent's model right-aligned, plus running child sessions.
-- Groups subagents by ID: `reviewer-*` agents go to REVIEWERS, the rest to WORKERS. PRIMARY and WORKERS start open, REVIEWERS starts collapsed; click a header to toggle it.
-- Injects delegation guidance into the orchestrator's system context.
+- Registers `/orchestrate` and `/review-panel`.
+- The orchestrator cannot edit, write, or run shell. Every change goes through a worker subagent.
+- A read-only `diff` tool is registered for the orchestrator and the reviewers, so they can verify what workers changed without shell access.
+- A sidebar roster shows PRIMARY / WORKERS / REVIEWERS with each agent's model, plus running child sessions. WORKERS is every subagent that is not a reviewer, including `explore`, `tester`, and any built-in or user subagent, not only the four domain workers in the table.
+- Delegation guidance is injected into the orchestrator's system context, and a strict review protocol is injected into each reviewer agent.
 
-The installer places the agent definitions in the global `~/.config/opencode/agents/` directory or a project's `.opencode/agents/` directory. The plugin cannot create agents at runtime.
+## Agents
+
+| id | mode | steps | role | allowed |
+| --- | --- | --- | --- | --- |
+| `orchestrator` | primary | 60 | plans, delegates, verifies | read, `diff`, subagents |
+| `explore` | subagent | 10 | read-only recon, returns a location map | read only |
+| `backend` | subagent | 25 | services, APIs, integrations | edit + shell on assigned files |
+| `frontend` | subagent | 25 | components, state, styling, accessibility | edit + shell on assigned files |
+| `database` | subagent | 25 | schemas, migrations, queries | edit + shell on assigned files |
+| `devops` | subagent | 25 | build, CI, containers, deploys | edit + shell on assigned files |
+| `tester` | subagent | 20 | reproduces bugs, writes tests, reports results | edit + shell on assigned files |
+| `reviewer` | subagent | 15 | strict read-only review through one lens | `diff`, read only |
+| `reviewer-security` | subagent | 12 | strict read-only security review | `diff`, read only |
+
+The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected, not copied into the agent files.
+
+## The diff tool
+
+`diff` takes `mode` (`working` is uncommitted, `branch` is against the merge base, `committed` is the last commit), `base` to compare against another ref, `context` for 0-10 lines around each hunk (default 3), and `path` to narrow to matching files. Output is per-file with status and line counts, capped at 60k chars; past that it tells you to pass `path` or `base`. The orchestrator is read-only with no shell, so this is how it verifies what workers changed. Reviewers get it too and have no shell at all. An empty result returns the sentence `No changes in mode <mode>.`, and a VCS failure returns `diff unavailable: <message>` as content rather than an error.
 
 ## Delegation
 
-The orchestrator uses OpenCode's built-in `subagent` tool. Independent work is launched with `background: true`. The tool creates a child session, returns its session ID immediately, and notifies the parent when the child finishes. The orchestrator does not create sessions itself.
+Independent work runs as background subagents; each call returns a sessionID immediately, and passing it back continues that same child. Only one writer touches a file set at a time unless the sets are disjoint, and `maxParallel` is a prompt-level hint that enforces nothing.
 
-Foreground `subagent` calls are reserved for work that must finish before the next step. Passing a returned `sessionID` back to `subagent` continues the same child conversation.
+## Review panel
 
-`maxParallel` controls only the prompt instruction. It does not enforce a hard limit in the runtime.
+`/review-panel` builds a brief: always `correctness` plus at most `maxReviewers - 1` further lenses, with `reviewer-security` added when the change touches auth, input handling, secrets, deserialization, SSRF, paths, HTML output, or SQL/shell construction. Findings are one line each (`file:line — defect — fix`), at most 6 (4 for security), ending with a `VERDICT` line. Dedupe on identical file:line:issue keeps the more specific lens' finding, and unverified claims go under Unverified, never as findings. A reviewer that returns no `VERDICT` line counts as failed and is rerun once with a narrower file list.
 
 ## Models
 
-Assign models in `opencode.jsonc` under the native `agents` key:
+Judgment agents are worth a stronger model: `orchestrator`, `reviewer`, `reviewer-security`. `explore`, the four workers, and `tester` are mechanical and run fine on cheaper ones.
 
 ```jsonc
 {
   "agents": {
     "orchestrator": { "model": "opencode-go/deepseek-v4.1-flash" },
-    "reviewer-general": { "model": "opencode-go/muse-spark-1.3-contributor" }
+    "reviewer": { "model": "opencode-go/deepseek-v4.1-flash" },
+    "reviewer-security": { "model": "opencode-go/deepseek-v4.1-flash" }
   }
 }
 ```
 
-Use `provider/model`, optionally followed by `#variant`. Agents without an explicit model inherit the parent session model. The sidebar shows the configured model or `inherit`.
-
-The plugin does not map models itself. OpenCode's agent transform only sees built-in agents during plugin setup, so a plugin-side model map cannot reliably apply to Markdown agents.
+Use `provider/model`, optionally followed by `#variant`. Agents without an explicit model inherit the parent session model. The plugin does not map models.
 
 ## Configuration
 
@@ -103,7 +91,8 @@ The plugin does not map models itself. OpenCode's agent transform only sees buil
       "package": "openchoreographer",
       "options": {
         "agent": "orchestrator",
-        "maxParallel": 4
+        "maxParallel": 4,
+        "maxReviewers": 2
       }
     }
   ]
@@ -111,29 +100,29 @@ The plugin does not map models itself. OpenCode's agent transform only sees buil
 ```
 
 - `agent`: ID of the primary orchestrator agent.
-- `maxParallel`: Number of background subagents the orchestrator is told to run at once. Clamped to 1-8.
+- `maxParallel`: background subagents the orchestrator is told to run at once, 1-8, default 4.
+- `maxReviewers`: reviewer calls per panel including correctness, 1-4, default 2. The cap covers `reviewer` lens calls only; `reviewer-security` is additional when its trigger fires. `1` means the correctness lens only.
 
 ## Usage
-
-Run the orchestrator directly:
 
 ```text
 opencode run --agent orchestrator --auto "Add a retry with backoff to the upload client and run the relevant tests."
 ```
 
-If `default_agent` is set to `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default. Use `/orchestrate` to switch an existing session. Use `/review-panel` for a strict review of the current changes.
-
-The orchestrator reads and searches, then delegates edits and commands to workers. Reviewers are read-only.
+If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default. Use `/orchestrate` to switch an existing session, `/review-panel` for a strict review of the current changes.
 
 ## Development
-
-`npm install` brings in type-only dev dependencies: `@opencode/client`, `@opentui/core`, `@opentui/solid`, `solid-js`, and `@types/node`. Consumers of the plugin never install them.
 
 ```sh
 npm install
 npx tsc --noEmit
+npm run dry-run
 ```
 
-`tsconfig.json` checks `index.ts`, `tui.tsx`, and `bin/install.mjs` under `strict`. It uses `moduleResolution: "bundler"` because the OpenCode and OpenTUI types sit behind `exports` conditions, and `jsxImportSource: "@opentui/solid"` so TSX is checked against OpenTUI's element types rather than React's.
+`bin/install.mjs` is checked by tsc through `allowJs`/`checkJs`. `@opentui/core` declares `node >= 26.4` for its own runtime, so `EBADENGINE` on install is harmless here. There is no test runner yet; `tsc` plus the installer dry-run plus live probes are the check.
 
-`@opentui/core` declares `engines.node >= 26.4.0` for its own runtime. On older Node, `npm install` prints an `EBADENGINE` warning. It is harmless for this package: nothing executes OpenTUI here, `tsc` reads only its declarations, and `bin/install.mjs` copies a fixed file list.
+## Troubleshooting
+
+- Missing agent definitions: the plugin throws at setup naming them. Re-run the installer with `--force`, then restart.
+- Sidebar empty: the TUI half failed to resolve `solid-js`. Re-run the installer without `--no-deps`.
+- Commands registered twice: two copies of the plugin are loaded. Remove one.

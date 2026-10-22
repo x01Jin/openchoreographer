@@ -3,10 +3,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const PLUGIN_DIR_NAME = "openchoreographer";
-const GITHUB_REPO = "x01Jin/openchoreographer";
-const PLUGIN_FILES = ["index.ts", "tui.tsx", "package.json", "README.md", "LICENSE"];
+const PLUGIN_FILES = ["index.ts", "tui.tsx", "shared.ts", "package.json", "README.md", "LICENSE"];
+const RETIRED_AGENT_FILES = [
+  "reviewer-general.md",
+  "reviewer-oop.md",
+  "reviewer-functional.md",
+  "reviewer-procedural.md",
+  "reviewer-concurrent.md",
+  "reviewer-distributed.md",
+  "reviewer-data.md",
+  "reviewer-api.md",
+  "reviewer-frontend.md",
+  "reviewer-performance.md",
+  "reviewer-testing.md",
+];
+const DEP_ARGS = ["install", "--omit=dev", "--no-audit", "--no-fund"];
 
 /** @param {unknown} err @returns {string} */
 function errorMessage(err) {
@@ -18,6 +32,19 @@ function isErrnoCode(err, code) {
   return typeof err === "object" && err !== null && "code" in err && err.code === code;
 }
 
+/**
+ * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
+ * @typedef {"installed" | "overwrote" | "same" | "stale" | "skipped"} CopyStatus
+ * @typedef {{ force: boolean, dryRun: boolean }} CopyOptions
+ * @typedef {{ installed: number, overwrote: number, same: number, stale: number, skipped: number }} CopyCounts
+ * @typedef {{ src: string, dest: string, group: "agents" | "plugin" }} CopyPlan
+ */
+
+/** @returns {CopyCounts} */
+function emptyCounts() {
+  return { installed: 0, overwrote: 0, same: 0, stale: 0, skipped: 0 };
+}
+
 function printUsage() {
   console.log(`Usage: node bin/install.mjs [init] [options]
 
@@ -26,10 +53,18 @@ Install the bundled agent definitions and optionally the plugin files.
 Options:
   --local      Copy plugin files into the global plugins dir, then install agents globally
   --project    Install into the current working directory (.opencode/); implies local plugin copy
-  --force      Overwrite existing agent files and plugin files
+  --force      Overwrite existing files that differ
+  --prune      Delete retired agent files in the target directory (requires --force)
   --dry-run    Print planned paths and actions; write nothing
   --no-agents  Skip agent installation
+  --no-deps    Skip npm install in the copied plugin directory
+  --version    Print the installer version
   -h, --help   Show this help
+
+Exit codes:
+  0  everything installed or already current
+  2  at least one file differs and needs --force (nothing written for it)
+  1  error
 
 Examples:
   node bin/install.mjs
@@ -38,22 +73,217 @@ Examples:
   node bin/install.mjs --project --force`);
 }
 
-/** @param {string[]} argv */
+/**
+ * @param {string[]} argv
+ * @returns {{ opts: InstallOpts, unknown: string[] }}
+ */
 function parseArgs(argv) {
-  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, help: false };
+  /** @type {InstallOpts} */
+  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, prune: false, help: false, version: false };
+  /** @type {string[]} */
   const unknown = [];
-  for (const arg of argv) {
-    if (arg === "init") continue;
-    else if (arg === "--local") opts.local = true;
+  let args = argv;
+  if (args.length > 0 && args[0] === "init") {
+    args = args.slice(1);
+  }
+  for (const arg of args) {
+    if (arg === "--local") opts.local = true;
     else if (arg === "--project") opts.project = true;
     else if (arg === "--force") opts.force = true;
     else if (arg === "--dry-run") opts.dryRun = true;
     else if (arg === "--no-agents") opts.noAgents = true;
+    else if (arg === "--no-deps") opts.noDeps = true;
+    else if (arg === "--prune") opts.prune = true;
+    else if (arg === "--version") opts.version = true;
     else if (arg === "--help" || arg === "-h") opts.help = true;
-    else if (arg.startsWith("--")) unknown.push(arg);
     else unknown.push(arg);
   }
   return { opts, unknown };
+}
+
+/**
+ * @param {string} packageRoot
+ * @returns {string}
+ */
+function readVersion(packageRoot) {
+  try {
+    const raw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === "object" && "version" in parsed && typeof parsed.version === "string") {
+      return parsed.version;
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Walk a destination path and its existing ancestors for symlinks.
+ * @param {string} dest
+ * @returns {string | null} the offending path, or null when clean
+ */
+function findSymlinkInPath(dest) {
+  let current = path.resolve(dest);
+  for (;;) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        return current;
+      }
+      if (process.platform === "win32" && fs.statSync(current).isSymbolicLink()) {
+        return current;
+      }
+    } catch (err) {
+      if (!isErrnoCode(err, "ENOENT")) {
+        throw err;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Print one file action line, path last.
+ * @param {boolean} dryRun
+ * @param {CopyStatus} status
+ * @param {string} dest
+ * @returns {void}
+ */
+function printAction(dryRun, status, dest) {
+  const prefix = dryRun ? "[dry-run] " : "";
+  const tag = `${status}:`.padEnd(10);
+  const suffix = status === "stale" ? " (use --force)" : "";
+  console.log(`${prefix}${tag} ${dest}${suffix}`);
+}
+
+/**
+ * Copy one file using content comparison. Never writes on dry-run or stale.
+ * @param {string} src source file path
+ * @param {string} dest destination file path
+ * @param {CopyOptions} opts copy options
+ * @returns {CopyStatus} the action taken, or planned when dry-run
+ */
+function copyOne(src, dest, opts) {
+  const badLink = findSymlinkInPath(dest);
+  if (badLink !== null) {
+    throw new Error(`Refusing to write through symlink: ${badLink}`);
+  }
+  /** @type {Buffer} */
+  const srcBuf = fs.readFileSync(src);
+  let destSize = -1;
+  try {
+    const destStat = fs.lstatSync(dest);
+    if (destStat.isSymbolicLink()) {
+      throw new Error(`Refusing to overwrite symlink: ${dest}`);
+    }
+    if (!destStat.isFile()) {
+      throw new Error(`Destination is not a regular file: ${dest}`);
+    }
+    destSize = destStat.size;
+  } catch (err) {
+    if (!isErrnoCode(err, "ENOENT")) {
+      throw err;
+    }
+  }
+  if (destSize < 0) {
+    printAction(opts.dryRun, "installed", dest);
+    if (!opts.dryRun) {
+      fs.copyFileSync(src, dest);
+    }
+    return "installed";
+  }
+  if (destSize === srcBuf.length) {
+    const destBuf = fs.readFileSync(dest);
+    if (srcBuf.equals(destBuf)) {
+      printAction(opts.dryRun, "same", dest);
+      return "same";
+    }
+  }
+  if (opts.force) {
+    printAction(opts.dryRun, "overwrote", dest);
+    if (!opts.dryRun) {
+      fs.copyFileSync(src, dest);
+    }
+    return "overwrote";
+  }
+  printAction(opts.dryRun, "stale", dest);
+  return "stale";
+}
+
+/**
+ * @param {CopyCounts} counts
+ * @param {CopyStatus} status
+ * @returns {void}
+ */
+function tally(counts, status) {
+  counts[status] += 1;
+}
+
+/**
+ * @param {string} label
+ * @param {string} target
+ * @param {CopyCounts} counts
+ * @param {boolean} dryRun
+ * @param {number} [pruned] pruned count; appended when pruning ran for this target
+ * @returns {void}
+ */
+function printSummary(label, target, counts, dryRun, pruned) {
+  const prefix = dryRun ? "[dry-run] " : "";
+  const prunedSuffix = pruned === undefined ? "" : `, ${pruned} pruned`;
+  console.log(`${prefix}${label} -> ${target}: installed=${counts.installed} overwrote=${counts.overwrote} same=${counts.same} stale=${counts.stale} skipped=${counts.skipped}${prunedSuffix}`);
+}
+
+/**
+ * Unlink retired agent files from one directory. Only names in
+ * RETIRED_AGENT_FILES are ever considered; anything else is left alone.
+ * Missing files are skipped silently. Symlinks and non-regular files are
+ * refused without unlinking. Never touches directories.
+ * @param {string} dir target directory holding agent files
+ * @param {boolean} dryRun print instead of unlinking
+ * @returns {{ pruned: number, errors: number }} per-file outcome counts
+ */
+function pruneRetiredFiles(dir, dryRun) {
+  let pruned = 0;
+  let errors = 0;
+  for (const file of RETIRED_AGENT_FILES) {
+    const full = path.join(dir, file);
+    /** @type {import("node:fs").Stats | null} */
+    let st = null;
+    try {
+      st = fs.lstatSync(full);
+    } catch (err) {
+      if (isErrnoCode(err, "ENOENT")) {
+        continue;
+      }
+      console.error(`Failed to inspect prune target: ${full}\n${errorMessage(err)}`);
+      errors += 1;
+      continue;
+    }
+    if (st === null || st.isSymbolicLink() || !st.isFile()) {
+      console.error(`refusing to prune symlink: ${full}`);
+      errors += 1;
+      continue;
+    }
+    if (dryRun) {
+      console.log(`[dry-run] prune: ${full}`);
+      pruned += 1;
+      continue;
+    }
+    try {
+      fs.unlinkSync(full);
+    } catch (err) {
+      console.error(`Failed to prune ${full}\n${errorMessage(err)}`);
+      errors += 1;
+      continue;
+    }
+    console.log(`pruned: ${full}`);
+    pruned += 1;
+  }
+  return { pruned, errors };
 }
 
 function main() {
@@ -64,8 +294,15 @@ function main() {
     process.exitCode = 1;
     return;
   }
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const packageRoot = path.resolve(scriptDir, "..");
+  const bundledAgentsDir = fileURLToPath(new URL("../agents/", import.meta.url));
   if (opts.help) {
     printUsage();
+    return;
+  }
+  if (opts.version) {
+    console.log(readVersion(packageRoot));
     return;
   }
   if (opts.local && opts.project) {
@@ -73,10 +310,11 @@ function main() {
     process.exitCode = 1;
     return;
   }
-
-  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-  const packageRoot = path.resolve(scriptDir, "..");
-  const bundledAgentsDir = fileURLToPath(new URL("../agents/", import.meta.url));
+  if (opts.prune && !opts.force) {
+    console.error("--prune requires --force");
+    process.exitCode = 1;
+    return;
+  }
 
   const isProject = opts.project;
   const copyPlugin = opts.local || opts.project;
@@ -96,13 +334,24 @@ function main() {
     }
   }
 
-  const projectRoot = process.cwd();
+  const projectRoot = path.resolve(process.cwd());
+  if (isProject && !opts.force) {
+    const fsRoot = path.parse(projectRoot).root;
+    if (projectRoot === os.homedir() || projectRoot === fsRoot) {
+      console.error(`Refusing --project in ${projectRoot}: that would write .opencode/ into your home directory or filesystem root. Run from a project directory, or pass --force to proceed anyway.`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const agentsTarget = isProject
     ? path.join(projectRoot, ".opencode", "agents")
     : path.join(globalConfigDir, "agents");
   const pluginTarget = isProject
     ? path.join(projectRoot, ".opencode", "plugins", PLUGIN_DIR_NAME)
     : path.join(globalConfigDir, "plugins", PLUGIN_DIR_NAME);
+  const pluginAgentsDir = path.join(pluginTarget, "agents");
+  const pluginBinDir = path.join(pluginTarget, "bin");
 
   if (isProject) {
     console.log(`Project root: ${projectRoot}`);
@@ -125,279 +374,176 @@ function main() {
       process.exitCode = 1;
       return;
     }
-    for (const name of agentSources) {
-      let st;
-      try {
-        st = fs.lstatSync(path.join(bundledAgentsDir, name));
-      } catch (err) {
-        console.error(`Failed to inspect bundled agent: ${name}\n${errorMessage(err)}`);
-        process.exitCode = 1;
-        return;
-      }
-      if (!st.isFile() || st.isSymbolicLink()) {
-        console.error(`Unexpected entry in agents/: ${name}`);
-        process.exitCode = 1;
-        return;
-      }
-    }
   }
 
-  let installedAgents = 0;
-  let skippedAgents = 0;
-  let installedPlugin = 0;
-  let skippedPlugin = 0;
-
-  /** @param {string} dest */
-  function refuseIfSymlink(dest) {
-    let st;
-    try {
-      st = fs.lstatSync(dest);
-    } catch (err) {
-      if (isErrnoCode(err, "ENOENT")) return false;
-      console.error(`Failed to inspect destination: ${dest}\n${errorMessage(err)}`);
-      process.exitCode = 1;
-      return true;
-    }
-    if (st.isSymbolicLink()) {
-      console.error(`Refusing to overwrite symlink: ${dest}`);
-      process.exitCode = 1;
-      return true;
-    }
-    return false;
-  }
-
-  /** @param {string} file */
-  function isRegularFile(file) {
-    try {
-      const st = fs.lstatSync(file);
-      return st.isFile() && !st.isSymbolicLink();
-    } catch (err) {
-      if (isErrnoCode(err, "ENOENT")) return false;
-      console.error(`Failed to inspect destination: ${file}\n${errorMessage(err)}`);
-      process.exitCode = 1;
-      return false;
-    }
-  }
-
-  // Agent installation
+  // Phase 1: build the full plan and validate every source before any write.
+  /** @type {CopyPlan[]} */
+  const plan = [];
   if (!opts.noAgents) {
-    if (!opts.dryRun) {
-      try {
-        fs.mkdirSync(agentsTarget, { recursive: true });
-      } catch (err) {
-        console.error(`Failed to create agents directory: ${agentsTarget}\n${errorMessage(err)}`);
-        process.exitCode = 1;
-        return;
-      }
-    } else {
-      console.log(`[dry-run] mkdir -p ${agentsTarget}`);
-    }
     for (const file of agentSources) {
-      const src = path.join(bundledAgentsDir, file);
-      const dest = path.join(agentsTarget, file);
-      if (refuseIfSymlink(dest)) return;
-      const exists = fs.existsSync(dest);
-      if (exists && !opts.force) {
-        if (!isRegularFile(dest)) {
-          console.error(`Destination is not a regular file: ${dest}`);
-          process.exitCode = 1;
-          return;
-        }
-        skippedAgents++;
-        console.log(`${opts.dryRun ? "[dry-run] " : ""}skip (exists): ${dest}`);
-        continue;
+      plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(agentsTarget, file), group: "agents" });
+    }
+  }
+  if (copyPlugin) {
+    for (const file of PLUGIN_FILES) {
+      plan.push({ src: path.join(packageRoot, file), dest: path.join(pluginTarget, file), group: "plugin" });
+    }
+    plan.push({ src: path.join(packageRoot, "bin", "install.mjs"), dest: path.join(pluginBinDir, "install.mjs"), group: "plugin" });
+    if (!opts.noAgents) {
+      for (const file of agentSources) {
+        plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(pluginAgentsDir, file), group: "plugin" });
       }
-      if (opts.dryRun) {
-        installedAgents++;
-        console.log(`[dry-run] ${exists ? "overwrite" : "install"}: ${src} -> ${dest}`);
-        continue;
+    }
+  }
+  for (const entry of plan) {
+    let srcStat;
+    try {
+      srcStat = fs.lstatSync(entry.src);
+    } catch (err) {
+      console.error(`Package file missing: ${entry.src}\n${errorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!srcStat.isFile() || srcStat.isSymbolicLink()) {
+      console.error(`Unexpected source entry: ${entry.src}`);
+      process.exitCode = 1;
+      return;
+    }
+    let badLink = null;
+    try {
+      badLink = findSymlinkInPath(entry.dest);
+    } catch (err) {
+      console.error(`Failed to inspect destination: ${entry.dest}\n${errorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (badLink !== null) {
+      console.error(`Refusing to write through symlink: ${badLink}`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const destStat = fs.lstatSync(entry.dest);
+      if (!destStat.isSymbolicLink() && !destStat.isFile()) {
+        console.error(`Destination is not a regular file: ${entry.dest}`);
+        process.exitCode = 1;
+        return;
       }
-      try {
-        if (!exists) {
-          fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
-        } else {
-          fs.copyFileSync(src, dest);
-        }
-        installedAgents++;
-        console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
-      } catch (err) {
-        console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
+    } catch (err) {
+      if (!isErrnoCode(err, "ENOENT")) {
+        console.error(`Failed to inspect destination: ${entry.dest}\n${errorMessage(err)}`);
         process.exitCode = 1;
         return;
       }
     }
-  } else {
+  }
+
+  // Phase 2: create target directories.
+  /** @type {string[]} */
+  const dirsToMake = [];
+  if (!opts.noAgents) {
+    dirsToMake.push(agentsTarget);
+  }
+  if (copyPlugin) {
+    dirsToMake.push(pluginTarget, pluginBinDir);
+    if (!opts.noAgents) {
+      dirsToMake.push(pluginAgentsDir);
+    }
+  }
+  for (const dir of dirsToMake) {
+    if (opts.dryRun) {
+      console.log(`[dry-run] mkdir -p ${dir}`);
+      continue;
+    }
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      console.error(`Failed to create directory: ${dir}\n${errorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // Phases 3-6: copy in plan order (agents, plugin files, installer, plugin agents).
+  const agentCounts = emptyCounts();
+  const pluginCounts = emptyCounts();
+  /** @type {CopyOptions} */
+  const copyOpts = { force: opts.force, dryRun: opts.dryRun };
+  for (const entry of plan) {
+    /** @type {CopyStatus} */
+    let status;
+    try {
+      status = copyOne(entry.src, entry.dest, copyOpts);
+    } catch (err) {
+      console.error(`Failed to copy ${entry.src} -> ${entry.dest}\n${errorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    tally(entry.group === "agents" ? agentCounts : pluginCounts, status);
+  }
+  if (opts.noAgents) {
     console.log("Skipping agent installation (--no-agents).");
   }
 
-  // Plugin file copy
+  // Dependency step for copied plugin dirs: the TUI imports need node_modules.
+  let depsInstalled = false;
   if (copyPlugin) {
-    const pluginAgentsDir = path.join(pluginTarget, "agents");
-    const pluginBinDir = path.join(pluginTarget, "bin");
-    if (!opts.dryRun) {
-      try {
-        fs.mkdirSync(pluginTarget, { recursive: true });
-        if (!opts.noAgents) {
-          fs.mkdirSync(pluginAgentsDir, { recursive: true });
-        }
-        fs.mkdirSync(pluginBinDir, { recursive: true });
-      } catch (err) {
-        console.error(`Failed to create plugin directory: ${pluginTarget}\n${errorMessage(err)}`);
-        process.exitCode = 1;
-        return;
-      }
+    const depCommand = `npm ${DEP_ARGS.join(" ")}`;
+    if (opts.dryRun) {
+      console.log(`[dry-run] ${depCommand} (cwd: ${pluginTarget})`);
+    } else if (opts.noDeps) {
+      console.log("Skipping npm install (--no-deps).");
     } else {
-      console.log(`[dry-run] mkdir -p ${pluginTarget}`);
-      if (!opts.noAgents) {
-        console.log(`[dry-run] mkdir -p ${pluginAgentsDir}`);
-      }
-      console.log(`[dry-run] mkdir -p ${pluginBinDir}`);
-    }
-    for (const file of PLUGIN_FILES) {
-      const src = path.join(packageRoot, file);
-      const dest = path.join(pluginTarget, file);
-      if (!fs.existsSync(src)) {
-        console.error(`Package file missing: ${src}`);
+      const result = spawnSync("npm", DEP_ARGS, { cwd: pluginTarget, stdio: "inherit", shell: process.platform === "win32" });
+      if (result.error || result.status !== 0) {
+        console.error(`Dependency install failed: ${depCommand} (cwd: ${pluginTarget}). The install is incomplete; fix npm and re-run.`);
         process.exitCode = 1;
         return;
       }
-      if (refuseIfSymlink(dest)) return;
-      const exists = fs.existsSync(dest);
-      if (exists && !opts.force) {
-        if (!isRegularFile(dest)) {
-          console.error(`Destination is not a regular file: ${dest}`);
-          process.exitCode = 1;
-          return;
-        }
-        skippedPlugin++;
-        console.log(`${opts.dryRun ? "[dry-run] " : ""}skip (exists): ${dest}`);
-        continue;
-      }
-      if (opts.dryRun) {
-        installedPlugin++;
-        console.log(`[dry-run] ${exists ? "overwrite" : "install"}: ${src} -> ${dest}`);
-        continue;
-      }
-      try {
-        if (!exists) {
-          fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
-        } else {
-          fs.copyFileSync(src, dest);
-        }
-        installedPlugin++;
-        console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
-      } catch (err) {
-        console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
-        process.exitCode = 1;
-        return;
-      }
-    }
-    // Install script copy so the copied package.json bin pointer stays valid
-    {
-      const src = path.join(packageRoot, "bin", "install.mjs");
-      const dest = path.join(pluginBinDir, "install.mjs");
-      if (!fs.existsSync(src)) {
-        console.error(`Package file missing: ${src}`);
-        process.exitCode = 1;
-        return;
-      }
-      if (refuseIfSymlink(dest)) return;
-      const exists = fs.existsSync(dest);
-      if (exists && !opts.force) {
-        if (!isRegularFile(dest)) {
-          console.error(`Destination is not a regular file: ${dest}`);
-          process.exitCode = 1;
-          return;
-        }
-        skippedPlugin++;
-        console.log(`${opts.dryRun ? "[dry-run] " : ""}skip (exists): ${dest}`);
-      } else if (opts.dryRun) {
-        installedPlugin++;
-        console.log(`[dry-run] ${exists ? "overwrite" : "install"}: ${src} -> ${dest}`);
-      } else {
-        try {
-          if (!exists) {
-            fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
-          } else {
-            fs.copyFileSync(src, dest);
-          }
-          installedPlugin++;
-          console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
-        } catch (err) {
-          console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
-          process.exitCode = 1;
-          return;
-        }
-      }
-    }
-    // Bundled agents into plugin dir
-    if (!opts.noAgents) {
-      for (const file of agentSources) {
-        const src = path.join(bundledAgentsDir, file);
-        const dest = path.join(pluginAgentsDir, file);
-        if (refuseIfSymlink(dest)) return;
-        const exists = fs.existsSync(dest);
-        if (exists && !opts.force) {
-          if (!isRegularFile(dest)) {
-            console.error(`Destination is not a regular file: ${dest}`);
-            process.exitCode = 1;
-            return;
-          }
-          skippedPlugin++;
-          console.log(`${opts.dryRun ? "[dry-run] " : ""}skip (exists): ${dest}`);
-          continue;
-        }
-        if (opts.dryRun) {
-          installedPlugin++;
-          console.log(`[dry-run] ${exists ? "overwrite" : "install"}: ${src} -> ${dest}`);
-          continue;
-        }
-        try {
-          if (!exists) {
-            fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
-          } else {
-            fs.copyFileSync(src, dest);
-          }
-          installedPlugin++;
-          console.log(`${exists ? "overwrote" : "installed"}: ${dest}`);
-        } catch (err) {
-          console.error(`Failed to copy ${src} -> ${dest}\n${errorMessage(err)}`);
-          process.exitCode = 1;
-          return;
-        }
-      }
+      depsInstalled = true;
     }
   }
 
   console.log("");
-  if (!opts.noAgents) {
-    if (opts.dryRun) {
-      console.log(`[dry-run] Agents: ${installedAgents} would install, ${skippedAgents} would skip -> ${agentsTarget}`);
-    } else {
-      console.log(`Agents: ${installedAgents} installed, ${skippedAgents} skipped -> ${agentsTarget}`);
+  /** @type {number | undefined} */
+  let agentsPruned = undefined;
+  /** @type {number | undefined} */
+  let pluginPruned = undefined;
+  if (opts.prune && !opts.noAgents) {
+    const agentsResult = pruneRetiredFiles(agentsTarget, opts.dryRun);
+    agentsPruned = agentsResult.pruned;
+    let pruneErrors = agentsResult.errors;
+    if (copyPlugin) {
+      const pluginResult = pruneRetiredFiles(pluginAgentsDir, opts.dryRun);
+      pluginPruned = pluginResult.pruned;
+      pruneErrors += pluginResult.errors;
+    }
+    if (pruneErrors > 0) {
+      process.exitCode = 1;
     }
   }
+  if (opts.noAgents) {
+    console.log("Agents: skipped (--no-agents).");
+  } else {
+    printSummary("Agents", agentsTarget, agentCounts, opts.dryRun, agentsPruned);
+  }
   if (copyPlugin) {
-    if (opts.dryRun) {
-      console.log(`[dry-run] Plugin: ${installedPlugin} would install, ${skippedPlugin} would skip -> ${pluginTarget}`);
-    } else {
-      console.log(`Plugin: ${installedPlugin} installed, ${skippedPlugin} skipped -> ${pluginTarget}`);
-    }
+    printSummary("Plugin", pluginTarget, pluginCounts, opts.dryRun, pluginPruned);
   } else {
     console.log("Plugin: not copied (use --local or --project to copy it).");
   }
 
   console.log("");
-  console.log("Next:");
-  if (copyPlugin) {
-    console.log("  1. Restart OpenCode; the local plugin is already in place.");
-  } else {
-    console.log(`  1. Install the plugin: opencode plugin add github:${GITHUB_REPO}`);
+  console.log("Next: Restart OpenCode to load the new agent definitions.");
+  if (copyPlugin && !depsInstalled) {
+    console.log(`Warning: dependencies not installed; the TUI half needs node_modules in ${pluginTarget} (run npm install there).`);
   }
-  console.log("  2. Restart OpenCode (or run: opencode service restart)");
-  console.log("  3. Run /orchestrate in a session");
-  console.log('Optional: add "default_agent": "orchestrator" to opencode.jsonc to make the orchestrator the default.');
-  console.log('Optional: assign models per agent under "agents" in opencode.jsonc.');
+
+  if (agentCounts.stale > 0 || pluginCounts.stale > 0) {
+    if (process.exitCode !== 1) {
+      process.exitCode = 2;
+    }
+  }
 }
 
 try {
