@@ -1,12 +1,12 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
-import { For, Show, createSignal } from "solid-js"
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import { isReviewer } from "./shared"
 
 type ModelRefLike = { id: string; providerID: string; variant?: string }
 
-type Section = "primary" | "workers" | "reviewers" | "todos"
+type Section = "agents" | "primary" | "workers" | "reviewers" | "todos"
 
 type TodoItem = {
   id?: string
@@ -49,6 +49,36 @@ function modelName(ref: ModelRefLike, models: ModelInfo[]): string {
   const model = models.find((candidate) => candidate.providerID === ref.providerID && (candidate.id === ref.id || candidate.modelID === ref.id))
   const name = model?.name?.trim() || `${ref.providerID}/${ref.id}`
   return ref.variant ? `${name}#${ref.variant}` : name
+}
+
+const PALETTE = ["#8aadf4", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6", "#8bd5ca", "#ed8796", "#ee99a0"]
+
+function hashColor(id: string): string {
+  let hash = 0
+  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0
+  return PALETTE[hash % PALETTE.length]
+}
+
+function agentColor(agent: AgentInfo | undefined, id: string | undefined): string {
+  return agent?.color ?? hashColor(id ?? "unknown")
+}
+
+const FLOW = ["#8aadf4", "#b4befe", "#c6a0f6", "#f5c2e7", "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#94e2d5", "#89dceb"]
+
+function FlowingLabel(props: { text: string }) {
+  const [phase, setPhase] = createSignal(0)
+  const timer = setInterval(() => setPhase((value) => value + 1), 140)
+  onCleanup(() => clearInterval(timer))
+  const chars = createMemo(() => Array.from(props.text))
+  return (
+    <box flexDirection="row">
+      <For each={chars()}>
+        {(char, index) => (
+          <text fg={FLOW[((phase() - index()) % FLOW.length + FLOW.length) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{char}</text>
+        )}
+      </For>
+    </box>
+  )
 }
 
 export default Plugin.define({
@@ -97,7 +127,7 @@ export default Plugin.define({
     }
 
     const [open, setOpen] = createSignal<Record<string, Record<Section, boolean>>>({})
-    const DEFAULT_OPEN: Record<Section, boolean> = { primary: true, workers: true, reviewers: false, todos: true }
+    const DEFAULT_OPEN: Record<Section, boolean> = { agents: true, primary: false, workers: false, reviewers: false, todos: true }
     const isOpen = (sessionID: string, section: Section): boolean => open()[sessionID]?.[section] ?? DEFAULT_OPEN[section]
     const toggle = (sessionID: string, section: Section) => {
       const next = !isOpen(sessionID, section)
@@ -144,7 +174,7 @@ export default Plugin.define({
     const todoDone = (sessionID: string) =>
       todoItems(sessionID).filter((item) => item.status === "completed" || item.status === "cancelled").length
 
-    const header = (sessionID: string, section: Section, title: string, count: () => string | number) => (
+    const header = (sessionID: string, section: Section, title: string, count: () => string | number, small = false) => (
       <box
         width="100%"
         focusable
@@ -156,7 +186,7 @@ export default Plugin.define({
           if (event.name === "return" || event.name === "space") toggle(sessionID, section)
         }}
       >
-        <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>{`${isOpen(sessionID, section) ? "▾" : "▸"} ${title} ${count()}`}</text>
+        <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>{`${isOpen(sessionID, section) ? (small ? "▾" : "▼") : (small ? "▸" : "▶")} ${title}${isOpen(sessionID, section) ? "" : ` (${count()})`}`}</text>
       </box>
     )
 
@@ -168,7 +198,7 @@ export default Plugin.define({
             <text wrapMode="none" flexShrink={0} fg={active() ? context.theme.text.base : context.theme.text.faint} selectable={false}>
               {active() ? "● " : "  "}
             </text>
-            <text wrapMode="none" fg={agent.color ?? context.theme.text.base} selectable={false}>
+            <text wrapMode="none" fg={agentColor(agent, agent.id)} selectable={false}>
               {truncate(agent.name, NAME_WIDTH)}
             </text>
           </box>
@@ -188,7 +218,7 @@ export default Plugin.define({
         <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
           <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
             <text wrapMode="none" flexShrink={0} fg={context.theme.text.faint} selectable={false}>{"  "}</text>
-            <text wrapMode="none" fg={agent()?.color ?? context.theme.text.base} selectable={false}>
+            <text wrapMode="none" fg={agentColor(agent(), session.agent)} selectable={false}>
               {truncate(agent()?.name ?? session.agent ?? "unknown", NAME_WIDTH)}
             </text>
           </box>
@@ -268,29 +298,31 @@ export default Plugin.define({
         seen.add(sessionID)
         const run = running(sessionID)
         return (
-          <box flexDirection="column" gap={1} width="100%">
-            <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>AGENTS & MODELS</text>
-            <Show when={agents() !== undefined} fallback={<text fg={context.theme.text.faint} selectable={false}>roster unavailable</text>}>
-              <box flexDirection="column" width="100%" gap={1}>
-                <box flexDirection="column" width="100%">
-                  {header(sessionID, "primary", "PRIMARY", () => primary().length)}
-                  <Show when={isOpen(sessionID, "primary")}><For each={primary()}>{(agent) => row(agent, sessionID)}</For></Show>
+          <box flexDirection="column" gap={0} width="100%">
+            {header(sessionID, "agents", "AGENTS & MODELS", () => (agents() ?? []).filter((agent) => !agent.hidden).length)}
+            <Show when={isOpen(sessionID, "agents")}>
+              <Show when={agents() !== undefined} fallback={<text fg={context.theme.text.faint} selectable={false}>roster unavailable</text>}>
+                <box flexDirection="column" width="100%" gap={0}>
+                  <box flexDirection="column" width="100%">
+                    {header(sessionID, "primary", "PRIMARY", () => primary().length, true)}
+                    <Show when={isOpen(sessionID, "primary")}><For each={primary()}>{(agent) => row(agent, sessionID)}</For></Show>
+                  </box>
+                  <box flexDirection="column" width="100%">
+                    {header(sessionID, "workers", "WORKERS", () => workers().length, true)}
+                    <Show when={isOpen(sessionID, "workers")}><For each={workers()}>{(agent) => row(agent, sessionID)}</For></Show>
+                  </box>
+                  <box flexDirection="column" width="100%">
+                    {header(sessionID, "reviewers", "REVIEWERS", () => reviewers().length, true)}
+                    <Show when={isOpen(sessionID, "reviewers")}><For each={reviewers()}>{(agent) => row(agent, sessionID)}</For></Show>
+                  </box>
                 </box>
-                <box flexDirection="column" width="100%">
-                  {header(sessionID, "workers", "WORKERS", () => workers().length)}
-                  <Show when={isOpen(sessionID, "workers")}><For each={workers()}>{(agent) => row(agent, sessionID)}</For></Show>
+              </Show>
+              <Show when={run.length > 0}>
+                <box flexDirection="column" width="100%" marginTop={1}>
+                  <FlowingLabel text={`RUNNING (${run.length})`} />
+                  <For each={run}>{(session) => runningRow(session)}</For>
                 </box>
-                <box flexDirection="column" width="100%">
-                  {header(sessionID, "reviewers", "REVIEWERS", () => reviewers().length)}
-                  <Show when={isOpen(sessionID, "reviewers")}><For each={reviewers()}>{(agent) => row(agent, sessionID)}</For></Show>
-                </box>
-              </box>
-            </Show>
-            <Show when={run.length > 0}>
-              <box flexDirection="column" width="100%">
-                <text fg={context.theme.text.muted} selectable={false} attributes={TextAttributes.BOLD}>{`RUNNING ${run.length}`}</text>
-                <For each={run}>{(session) => runningRow(session)}</For>
-              </box>
+              </Show>
             </Show>
             <Show when={todoItems(sessionID).length > 0}>
               <box flexDirection="column" width="100%">
