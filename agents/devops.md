@@ -47,6 +47,7 @@ Build configuration, CI pipelines, containers, infrastructure, and deployment co
 - Touch only the files assigned to you. If a change outside them is required, report it in `BLOCKED:` instead of making it. Another worker may own that file.
 - If a decision blocks you, stop and put it in `BLOCKED:` with the options and your recommendation. Do not call any question tool.
 - You are the only writer on the files assigned to you. Do not edit a file the task did not assign.
+- When a code-intelligence MCP is configured, use it to find CI, build, and deploy references before changing them.
 
 ## Return
 

@@ -15,5 +15,5 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["*.ts", "*.tsx", "bin/install.mjs"]
+  "include": ["*.ts", "*.tsx", "tests/*.ts", "bin/install.mjs"]
 }

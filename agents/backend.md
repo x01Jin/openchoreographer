@@ -58,6 +58,7 @@ APIs, services, authentication and authorization, integrations, background jobs,
 - Touch only the files assigned to you. If a change outside them is required, report it in `BLOCKED:` instead of making it. Another worker may own that file.
 - If a decision blocks you, stop and put it in `BLOCKED:` with the options and your recommendation. Do not call any question tool.
 - You are the only writer on the files assigned to you. Do not edit a file the task did not assign.
+- When configured, use `context7` for library and API shapes and a code-intelligence MCP for call paths; never guess an API you can look up.
 
 ## Return
 

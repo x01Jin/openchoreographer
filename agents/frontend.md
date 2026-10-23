@@ -58,6 +58,7 @@ Components, client state, styling, accessibility, responsive layout, loading and
 - Touch only the files assigned to you. If a change outside them is required, report it in `BLOCKED:` instead of making it. Another worker may own that file.
 - If a decision blocks you, stop and put it in `BLOCKED:` with the options and your recommendation. Do not call any question tool.
 - You are the only writer on the files assigned to you. Do not edit a file the task did not assign.
+- When configured, use `context7` for component and library APIs, and a browser MCP (for example `playwright`) to verify behavior you cannot confirm from code.
 
 ## Return
 

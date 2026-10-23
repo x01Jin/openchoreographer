@@ -39,6 +39,7 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 - A read-only `diff` tool is registered for the orchestrator and the reviewers, so they can verify what workers changed without shell access.
 - A sidebar roster shows PRIMARY / WORKERS / REVIEWERS with each agent's model, plus running child sessions. WORKERS is every subagent that is not a reviewer, including `explore`, `tester`, and any built-in or user subagent, not only the four domain workers in the table.
 - Delegation guidance is injected into the orchestrator's system context, and a strict review protocol is injected into each reviewer agent.
+- Each text part of a subagent result over 4000 characters is clipped before the orchestrator sees it: the head and the tail survive (the worker return contract puts TASK and FILES at the top, BLOCKED and RISK at the bottom) with a marker giving the dropped character count. This is a safety net for foreground subagent calls; a background child returns its sessionID immediately and the parent's copy of its report is delivered by the host.
 
 ## Agents
 
@@ -54,15 +55,19 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 | `reviewer` | subagent | 15 | strict read-only review through one lens | `diff`, read only |
 | `reviewer-security` | subagent | 12 | strict read-only security review | `diff`, read only |
 
-The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected, not copied into the agent files.
+The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected as one `id — label: hint` line per lens, not copied into the agent files.
 
 ## The diff tool
 
-`diff` takes `mode` (`working` is uncommitted, `branch` is against the merge base, `committed` is the last commit), `base` to compare against another ref, `context` for 0-10 lines around each hunk (default 3), and `path` to narrow to matching files. Output is per-file with status and line counts, capped at 60k chars; past that it tells you to pass `path` or `base`. The orchestrator is read-only with no shell, so this is how it verifies what workers changed. Reviewers get it too and have no shell at all. An empty result returns the sentence `No changes in mode <mode>.`, and a VCS failure returns `diff unavailable: <message>` as content rather than an error.
+`diff` takes `mode` (`working` is uncommitted, `branch` is against the merge base, `committed` is the last commit), `base` to compare against another ref, `context` for 0-10 lines around each hunk (default 3), and `path` to narrow to matching files. Output is per-file with status and line counts, capped at 60k chars; past that it tells you to pass `path` or `base`. The orchestrator is read-only with no shell, so this is how it verifies what workers changed. Reviewers get it too and have no shell at all. An empty result returns the sentence `No changes in mode <mode>.`, and a VCS failure returns `diff unavailable: <message>` as content rather than an error. When the working tree is CRLF and the repository blobs are LF, the VCS provider reports every modified file as a full rewrite; the tool collapses `-`/`+` pairs that differ only by a trailing carriage return, recomputes each file's addition and deletion counts, and drops files that differ only in line endings, while a reordered block is not collapsed. The output is for reading, not a patch you can apply. The first line is a routing line: `Risk: <n> files, +<additions> -<deletions>. Signals: <category> (<file>) ... Lenses: <ids>.` Signals cover auth, secrets, sql, shell, and html, at most three, sanitized onto one line; the suggested lenses are always correctness, plus security when any signal fires and data when sql fires. That is a floor: path traversal, SSRF, and deserialization stay judgment calls for the reviewers.
 
 ## Delegation
 
-Independent work runs as background subagents; each call returns a sessionID immediately, and passing it back continues that same child. Only one writer touches a file set at a time unless the sets are disjoint, and `maxParallel` is a prompt-level hint that enforces nothing.
+Independent work runs as background subagents; each call returns a sessionID immediately, and passing it back continues that same child. Only one writer touches a file set at a time unless the sets are disjoint, and `maxParallel` is a prompt-level hint that enforces nothing. The orchestrator is told to verify a finished batch with a single `diff` read after the batch, narrowing with `path` when it spans many files, rather than re-reading after every child.
+
+Effort is tiered, and a tier is a ceiling, not a target: the orchestrator picks the tier before spawning anything and re-checks it against the `Risk:` line the `diff` tool returns. Tier 0 (no file change) spawns nothing; Tier 1 (one mechanical file) is one worker with no reviewer; Tier 2 (two to five files or new tests) adds the correctness lens only; Tier 3 (more than five files or any risk signal) adds correctness plus security, plus `tester` when behavior changed.
+
+When `explore` ran, its map is pasted into child prompts so children do not rediscover the tree. MCP tools are routed by agent (code-intelligence, `context7`, browser), while MCP tools that change external state belong to workers, never to the read-only orchestrator.
 
 ## Review panel
 
@@ -105,6 +110,8 @@ Valid keys are the managed subagents: `explore`, `backend`, `frontend`, `databas
 A 429, a 402, or an error whose message names a rate limit, quota, usage limit, or free-tier limit marks that model unavailable. Availability is tracked per `provider/model`, not per agent, so one exhausted model affects every agent that uses it.
 
 Before a subagent is spawned the plugin picks the first configured model that is not marked unavailable and passes it to the subagent call. When no alternate is available it still tries the last one rather than failing. If a spawn fails on an exhausted model, the plugin retries that one spawn once with the fallback model and no more; a failure on a model that is not exhausted propagates untouched. The host's own retry is switched off for an agent that has fallbacks.
+
+A spawn that fails after the working tree changed is not retried on a fallback model, because a retry would start a fresh child session against the files the failed one already wrote; the error names up to five changed files. At setup, when a fallback model's context window is smaller than its primary's, the plugin logs a warning naming both limits, and those limits are advisory: they never block setup.
 
 A mark expires after 5 minutes, and the window doubles on each new failure up to 60 minutes. A successful spawn on a model clears its state immediately, so the primary is used again as soon as it works.
 
@@ -150,10 +157,11 @@ npx tsc --noEmit
 npm run dry-run
 ```
 
-`bin/install.mjs` is checked by tsc through `allowJs`/`checkJs`. `@opentui/core` declares `node >= 26.4` for its own runtime, so `EBADENGINE` on install is harmless here. There is no test runner yet; `tsc` plus the installer dry-run plus live probes are the check.
+`bin/install.mjs` is checked by tsc through `allowJs`/`checkJs`. `@opentui/core` declares `node >= 26.4` for its own runtime, so `EBADENGINE` on install is harmless here. `npm test` runs the `node:test` suites in `tests/` through `tsx` (a dev-only dependency, not shipped), and `npx tsc --noEmit` still typechecks the plugin and the tests.
 
 ## Troubleshooting
 
 - Missing agent definitions: the plugin logs a warning naming the unregistered agents and still loads. Re-run `node bin/install.mjs --force`, then restart OpenCode.
 - Sidebar empty: the TUI half failed to resolve `solid-js`. Re-run the installer without `--no-deps`.
 - Commands registered twice: two copies of the plugin are loaded. Remove one.
+- Diff counts that look like whole files: the VCS provider is comparing a CRLF working tree against LF blobs. The tool collapses that churn; if the counts still look wrong, check `git ls-files --eol` and the repository's line-ending configuration.

@@ -59,6 +59,7 @@ Test coverage, reproductions, assertions, fixtures, determinism, and focused ver
 - If a decision blocks you, stop and put it in `BLOCKED:` with the options and your recommendation. Do not call any question tool.
 - Touch only the files assigned to you. If a change outside them is required, report it in `BLOCKED:` instead of making it. Another worker may own that file.
 - You are the only writer on the files assigned to you. Do not edit a file the task did not assign.
+- When a browser MCP (for example `playwright`) is configured, use it for UI verification; name the tool and command you actually ran.
 
 ## Return
 

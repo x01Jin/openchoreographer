@@ -2,46 +2,26 @@ import { Plugin } from "@opencode/plugin"
 import {
   AGENT_IDS,
   EXPLORE_ID,
+  MAX_DIFF_CHARS,
   REVIEWER_IDS,
   STRICT_REVIEW_PROTOCOL,
   WORKER_IDS,
   buildDelegationText,
   buildReviewBrief,
+  clipResultStats,
+  collapseEolOnlyChanges,
   isReviewer,
   isWorker,
   normalizeOptions,
+  sanitizeForContext,
+  summarizeChanges,
+  validateDiffInput,
+  type Options,
+  type ValidatedDiffInput,
 } from "./shared"
 import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "./fallback"
 
 type Registration = { dispose: () => Promise<void> }
-
-type ValidatedDiffInput = {
-  mode: "working" | "branch" | "committed"
-  base: string | undefined
-  context: number
-  path: string | undefined
-}
-
-function validateDiffInput(input: unknown): ValidatedDiffInput {
-  const record = (input ?? {}) as Record<string, unknown>
-  const rawMode = record.mode
-  const mode = rawMode === "working" || rawMode === "branch" || rawMode === "committed" ? rawMode : "working"
-  const rawContext = record.context
-  const context =
-    typeof rawContext === "number" && Number.isFinite(rawContext) ? Math.min(10, Math.max(0, Math.floor(rawContext))) : 3
-  const rawBase = record.base
-  const trimmedBase = typeof rawBase === "string" ? rawBase.trim() : ""
-  if (trimmedBase && (/^[-]/.test(trimmedBase) || /[\s\x00-\x1F\x7F-\x9F]/.test(trimmedBase))) {
-    throw new TypeError('diff: invalid "base": refs cannot start with "-" or contain whitespace')
-  }
-  const base = trimmedBase ? trimmedBase : undefined
-  const rawPath = record.path
-  const trimmedPath = typeof rawPath === "string" ? rawPath.trim() : ""
-  const path = trimmedPath ? trimmedPath : undefined
-  return { mode, base, context, path }
-}
-
-const MAX_DIFF_CHARS = 60_000
 
 let active: Registration[] = []
 let epoch = 0
@@ -66,6 +46,70 @@ async function resolvePrimary(ctx: Plugin.Context, agent: string): Promise<Parse
       : undefined
   primaryCache.set(agent, { model, at: now })
   return model
+}
+
+type TreeEntry = { readonly file: string; readonly status: string }
+
+function treeKey(entry: TreeEntry): string {
+  return entry.file + ":" + entry.status
+}
+
+async function readTree(ctx: Plugin.Context): Promise<readonly TreeEntry[] | undefined> {
+  try {
+    const { data } = await ctx.vcs.status()
+    return data
+  } catch {
+    return undefined
+  }
+}
+
+function changedFiles(baseline: ReadonlySet<string>, current: readonly TreeEntry[]): string[] {
+  const changed: string[] = []
+  for (const entry of current) {
+    if (baseline.has(treeKey(entry))) continue
+    if (!changed.includes(entry.file)) changed.push(entry.file)
+  }
+  return changed
+}
+
+function changedTreeError(error: unknown, changed: readonly string[]): Error {
+  const message = (error instanceof Error ? error.message : String(error))
+    .replace(/\u001B\[[0-9;]*m/g, "")
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
+  const named =
+    changed.slice(0, 5).map(sanitizeForContext).join(", ") + (changed.length > 5 ? ` +${changed.length - 5} more` : "")
+  return new Error(
+    `${message}\nNot retrying on a fallback model: the working tree changed after this spawn started, so a retry would run against files that may already hold its work (${named}). Verify the diff instead of spawning it again.`,
+    { cause: error },
+  )
+}
+
+async function warnNarrowFallbacks(ctx: Plugin.Context, options: Options): Promise<void> {
+  try {
+    const catalog = await ctx.model.list()
+    const limits = new Map<string, number>()
+    for (const model of catalog.data) {
+      // The catalog carries the model id twice; index both so either form resolves a configured key.
+      limits.set(model.providerID + "/" + model.modelID, model.limit.context)
+      limits.set(model.providerID + "/" + model.id, model.limit.context)
+    }
+    for (const [agent, alternates] of Object.entries(options.fallback)) {
+      if (alternates.length === 0) continue
+      const primary = await resolvePrimary(ctx, agent)
+      if (primary === undefined) continue
+      const primaryLimit = limits.get(primary.key)
+      if (primaryLimit === undefined) continue
+      for (const alternate of alternates) {
+        const alternateLimit = limits.get(alternate.key)
+        if (alternateLimit === undefined || alternateLimit >= primaryLimit) continue
+        console.warn(
+          `openchoreographer: fallback for "${agent}" has a smaller context window than its primary: ${primary.key} allows ${primaryLimit} tokens, ${alternate.key} allows ${alternateLimit}`,
+        )
+      }
+    }
+  } catch {
+    // Limits are advisory: an unavailable catalog or an unknown model must not block setup.
+  }
 }
 
 const TODOS_KEY = "openchoreographer.todos"
@@ -186,6 +230,40 @@ export default Plugin.define({
       )
 
       registrations.push(
+        await ctx.tool.hook("execute.after", (event) => {
+          if (event.tool !== "subagent" || event.status !== "completed") return
+          // Clipping is best-effort: a mutation failure must never turn a finished call into an error.
+          try {
+            const result = event.result
+            if (typeof result.content === "string") {
+              const text = result.content
+              const clipped = clipResultStats(text)
+              if (clipped.text === text) return
+              event.result = {
+                ...result,
+                content: clipped.text,
+                metadata: { ...result.metadata, resultBudget: { dropped: clipped.dropped } },
+              }
+              return
+            }
+            if (!Array.isArray(result.content)) return
+            let dropped = 0
+            const content = result.content.map((entry) => {
+              if (entry.type !== "text") return entry
+              const clipped = clipResultStats(entry.text)
+              if (clipped.text === entry.text) return entry
+              dropped += clipped.dropped
+              return { ...entry, text: clipped.text }
+            })
+            if (dropped === 0) return
+            event.result = { ...result, content, metadata: { ...result.metadata, resultBudget: { dropped } } }
+          } catch (error) {
+            console.warn(`openchoreographer: result budget skipped for a subagent result: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }),
+      )
+
+      registrations.push(
         await ctx.tool.transform((editor) => {
           const target = editor.get("subagent")
           if (target === undefined || typeof target.execute !== "function") return
@@ -202,7 +280,13 @@ export default Plugin.define({
                   : agent === undefined
                     ? undefined
                     : await resolvePrimary(ctx, agent)
+              let baseline: ReadonlySet<string> | undefined
               try {
+                // The baseline is status-based: a file already dirty at spawn and edited further is not detected.
+                if (agent !== undefined && (options.fallback[agent]?.length ?? 0) > 0) {
+                  const tree = await readTree(ctx)
+                  if (tree !== undefined) baseline = new Set(tree.map(treeKey))
+                }
                 const result = await original(input, context)
                 if (used !== undefined) breaker.succeed(used, startedAt)
                 return result
@@ -220,6 +304,14 @@ export default Plugin.define({
                 if (!choice.fellBack || choice.model === undefined) throw error
                 // Never resend the model that just failed, and never route to an exhausted one.
                 if (choice.model.key === used.key || !breaker.available(choice.model)) throw error
+                // Do not pay twice for a failed spawn; a tree we could not read either time retries exactly as before.
+                if (baseline !== undefined) {
+                  const current = await readTree(ctx)
+                  if (current !== undefined) {
+                    const changed = changedFiles(baseline, current)
+                    if (changed.length > 0) throw changedTreeError(error, changed)
+                  }
+                }
                 const alternate = choice.model.key + (choice.model.variant ? "#" + choice.model.variant : "")
                 try {
                   const result = await original({ ...fields, model: alternate }, context)
@@ -253,6 +345,9 @@ export default Plugin.define({
         console.warn("openchoreographer: agent list unavailable, skipping setup validation")
       }
 
+      // Context-window limits are advisory; a catalog read must never break setup.
+      if (Object.keys(options.fallback).length > 0) void warnNarrowFallbacks(ctx, options).catch(() => undefined)
+
       registrations.push(
         await ctx.tool.transform((editor) => {
           editor.add({
@@ -284,11 +379,31 @@ export default Plugin.define({
                   }
                   return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode } }
                 }
-                const blocks = scoped.map((entry) => {
-                  const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
-                  const patch = entry.patch.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
-                  return `${file} (${entry.status} +${entry.additions} -${entry.deletions})\n${patch}`
+                // A CRLF working tree over LF blobs turns every modified file into a whole-file rewrite; collapse those
+                // pairs first so the summary, the counts, and the 60k budget all describe what actually changed.
+                const changed = scoped.flatMap((entry) => {
+                  const collapsed = collapseEolOnlyChanges(entry.patch)
+                  return collapsed === undefined ? [] : [{ entry, collapsed }]
                 })
+                if (changed.length === 0) {
+                  return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode } }
+                }
+                const header = summarizeChanges(
+                  changed.map(({ entry, collapsed }) => ({
+                    file: entry.file,
+                    patch: collapsed.patch,
+                    additions: collapsed.additions,
+                    deletions: collapsed.deletions,
+                  })),
+                )
+                const blocks = [
+                  header,
+                  ...changed.map(({ entry, collapsed }) => {
+                  const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+                  const patch = collapsed.patch.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
+                  return `${file} (${entry.status} +${collapsed.additions} -${collapsed.deletions})\n${patch}`
+                  }),
+                ]
                 const total = blocks.reduce((sum, block) => sum + block.length, 0) + (blocks.length > 1 ? (blocks.length - 1) * 2 : 0)
                 const kept: string[] = []
                 let keptLength = 0
@@ -307,9 +422,9 @@ export default Plugin.define({
                   }
                   const shown = cut
                   text = text.slice(0, cut) + `\n… truncated at 60000 chars (showing ${shown} of ${total}); pass path to narrow, or base to compare against another ref`
-                  return { content: text, metadata: { files: scoped.length, mode, truncated: true, total } }
+                  return { content: text, metadata: { files: changed.length, mode, truncated: true, total } }
                 }
-                return { content: text, metadata: { files: scoped.length, mode } }
+                return { content: text, metadata: { files: changed.length, mode } }
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error)
                 return { content: `diff unavailable: ${message}`, metadata: { files: 0, mode, error: true } }
@@ -328,30 +443,6 @@ export default Plugin.define({
             execute: async (input, { sessionID }) => {
               const parsed = parseTodos((input as { todos?: unknown } | undefined)?.todos)
               const session = await ctx.session.get({ sessionID })
-              const stored = session.metadata?.[TODOS_KEY]
-              const prev = new Map<string, TodoStatus>()
-              if (Array.isArray(stored)) {
-                for (const entry of stored as unknown[]) {
-                  if (
-                    typeof entry === "object" &&
-                    entry !== null &&
-                    typeof (entry as { content?: unknown }).content === "string" &&
-                    typeof (entry as { status?: unknown }).status === "string" &&
-                    STATUSES.includes((entry as { status: string }).status as TodoStatus)
-                  ) {
-                    prev.set((entry as { content: string }).content, (entry as { status: string }).status as TodoStatus)
-                  }
-                }
-              }
-              // One step per write. Anything not already completed counts as newly completed, so marking everything in_progress in one write and completing it in the next cannot batch-complete a list.
-              const newlyCompleted = parsed.filter(
-                (item) => item.status === "completed" && prev.get(item.content) !== "completed",
-              )
-              if (newlyCompleted.length > 1) {
-                throw new Error(
-                  `Refused: ${newlyCompleted.length} items completed in one write. Complete at most one step per write: mark it in_progress, do the work, then mark it completed in the next write.`,
-                )
-              }
               const rows: Array<Record<string, string>> = parsed.map((item) => {
                 const row: Record<string, string> = { id: item.id, content: item.content, status: item.status }
                 if (item.priority) row.priority = item.priority
