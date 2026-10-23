@@ -1,13 +1,17 @@
 import { Plugin } from "@opencode/plugin"
 import {
   AGENT_IDS,
+  EXPLORE_ID,
+  REVIEWER_IDS,
   STRICT_REVIEW_PROTOCOL,
+  WORKER_IDS,
   buildDelegationText,
   buildReviewBrief,
   isReviewer,
   isWorker,
   normalizeOptions,
 } from "./shared"
+import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "./fallback"
 
 type Registration = { dispose: () => Promise<void> }
 
@@ -41,6 +45,28 @@ const MAX_DIFF_CHARS = 60_000
 
 let active: Registration[] = []
 let epoch = 0
+const breaker = createBreaker({ initialMs: 5 * 60_000, maxMs: 60 * 60_000 })
+let wrapperInstalled = false
+
+const PRIMARY_TTL_MS = 30_000
+const primaryCache = new Map<string, { model: ParsedModel | undefined; at: number }>()
+
+async function resolvePrimary(ctx: Plugin.Context, agent: string): Promise<ParsedModel | undefined> {
+  const cached = primaryCache.get(agent)
+  const now = Date.now()
+  if (cached !== undefined && now - cached.at < PRIMARY_TTL_MS) return cached.model
+  // .then also catches a synchronous throw from the client method, which .catch on the call result would miss.
+  const listed = await Promise.resolve()
+    .then(() => ctx.agent.list({}))
+    .catch(() => undefined)
+  const found = listed?.data.find((a) => a.id === agent)
+  const model =
+    found?.model !== undefined
+      ? parseModel(found.model.providerID + "/" + found.model.id + (found.model.variant ? "#" + found.model.variant : ""))
+      : undefined
+  primaryCache.set(agent, { model, at: now })
+  return model
+}
 
 const TODOS_KEY = "openchoreographer.todos"
 
@@ -111,18 +137,117 @@ export default Plugin.define({
   id: "openchoreographer",
   async setup(ctx) {
     const generation = ++epoch
+    wrapperInstalled = false
     const previous = active
     active = []
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
     const options = normalizeOptions(ctx.options)
     const registrations: Registration[] = []
     try {
+      registrations.push(
+        await ctx.session.hook("retry", (event) => {
+          if (!isQuotaError(event.error)) return
+          // The host Model.Ref splits provider and id, so rejoin them for breaker accounting.
+          const current = parseModel(event.model.providerID + "/" + event.model.id + (event.model.variant ? "#" + event.model.variant : ""))
+          if (current === undefined) return
+          breaker.fail(current, { retryAfterMs: event.error.retryAfterMs })
+          const alternates = options.fallback[event.agent]
+          // Only suppress the host retry when the wrapper can actually route to a fallback.
+          if (alternates !== undefined && alternates.length > 0 && wrapperInstalled) event.decision = { retry: false }
+        }),
+      )
+
+      registrations.push(
+        await ctx.tool.hook("execute.before", async (event) => {
+          if (event.tool !== "subagent") return
+          if (typeof event.input !== "object" || event.input === null) return
+          // The subagent input shape is host-defined, so narrow it once to read fields.
+          const record = event.input as Record<string, unknown>
+          if (typeof record.agent !== "string") return
+          const agent = record.agent
+          const alternates = options.fallback[agent]
+          if (alternates === undefined || alternates.length === 0) return
+          const configured = await resolvePrimary(ctx, agent)
+          if (configured === undefined) return
+          let primary = configured
+          const raw = record.model
+          if (typeof raw === "string") {
+            const requested = parseModel(raw)
+            if (requested !== undefined) {
+              if (breaker.available(requested)) return
+              primary = requested
+            }
+          }
+          const choice = chooseModel({ primary, alternates, available: (m) => breaker.available(m) })
+          if (choice.model !== undefined && choice.fellBack) {
+            record.model = choice.model.key + (choice.model.variant ? "#" + choice.model.variant : "")
+          }
+        }),
+      )
+
+      registrations.push(
+        await ctx.tool.transform((editor) => {
+          const target = editor.get("subagent")
+          if (target === undefined || typeof target.execute !== "function") return
+          editor.update("subagent", (tool) => {
+            const original = target.execute
+            tool.execute = async (input, context) => {
+              // The subagent input shape is host-defined, so narrow it once to read fields.
+              const fields = input as Record<string, unknown>
+              const startedAt = Date.now()
+              const agent = typeof fields.agent === "string" ? fields.agent : undefined
+              const used =
+                typeof fields.model === "string"
+                  ? parseModel(fields.model)
+                  : agent === undefined
+                    ? undefined
+                    : await resolvePrimary(ctx, agent)
+              try {
+                const result = await original(input, context)
+                if (used !== undefined) breaker.succeed(used, startedAt)
+                return result
+              } catch (error) {
+                // A cancelled child is not a provider failure; retrying would ignore the abort.
+                if (context.signal.aborted) throw error
+                const message = error instanceof Error ? error.message : String(error)
+                if (/abort|cancel/i.test(message)) throw error
+                if (agent === undefined) throw error
+                const alternates = options.fallback[agent]
+                if (used === undefined || alternates === undefined || alternates.length === 0) throw error
+                if (!isQuotaError({ message }) && breaker.available(used)) throw error
+                breaker.fail(used)
+                const choice = chooseModel({ primary: used, alternates, available: (m) => breaker.available(m) })
+                if (!choice.fellBack || choice.model === undefined) throw error
+                // Never resend the model that just failed, and never route to an exhausted one.
+                if (choice.model.key === used.key || !breaker.available(choice.model)) throw error
+                const alternate = choice.model.key + (choice.model.variant ? "#" + choice.model.variant : "")
+                try {
+                  const result = await original({ ...fields, model: alternate }, context)
+                  breaker.succeed(choice.model, startedAt)
+                  return result
+                } catch (retryError) {
+                  breaker.fail(choice.model)
+                  throw retryError
+                }
+              }
+            }
+          })
+          wrapperInstalled = true
+        }),
+      )
+
       const listed = await ctx.agent.list({}).catch(() => undefined)
       if (listed) {
         const ids = listed.data.map((agent) => agent.id)
         const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id)) : []
         if (missing.length > 0) {
           console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
+        }
+        for (const id of Object.keys(options.fallback)) {
+          const found = listed.data.find((a) => a.id === id)
+          if (found?.model === undefined) {
+            console.warn(`openchoreographer: fallback configured for "${id}" but that agent has no explicit model; it inherits the parent and fallback is skipped`)
+          }
         }
       } else {
         console.warn("openchoreographer: agent list unavailable, skipping setup validation")
@@ -250,6 +375,41 @@ export default Plugin.define({
             },
           })
           console.log("[openchoreographer] registered todowrite and todoread")
+        }),
+      )
+
+      registrations.push(
+        await ctx.tool.transform((editor) => {
+          editor.add({
+            name: "fallback_status",
+            description: "Report each managed agent's primary model, configured fallbacks, and any active rate-limit backoff.",
+            input: { type: "object", properties: {}, additionalProperties: false },
+            options: { permission: "read" },
+            execute: async () => {
+              try {
+                const managed: readonly string[] = [EXPLORE_ID, ...WORKER_IDS, ...REVIEWER_IDS]
+                const agents = await Promise.all(
+                  managed.map(async (agent) => {
+                    const primary = await resolvePrimary(ctx, agent)
+                    const fallbacks = options.fallback[agent] ?? []
+                    const models = primary === undefined ? fallbacks : [primary, ...fallbacks]
+                    return {
+                      agent,
+                      primary: primary === undefined ? null : primary.key,
+                      fallbacks: fallbacks.map((model) => model.key),
+                      backoffMs: models
+                        .map((model) => ({ model: model.key, waitMs: breaker.waitMs(model) }))
+                        .filter((entry) => entry.waitMs > 0),
+                    }
+                  }),
+                )
+                return { content: JSON.stringify({ agents }, null, 2) }
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                return { content: "fallback status unavailable: " + message }
+              }
+            },
+          })
         }),
       )
 

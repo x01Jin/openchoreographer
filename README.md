@@ -84,6 +84,34 @@ Judgment agents are worth a stronger model: `orchestrator`, `reviewer`, `reviewe
 
 Use `provider/model`, optionally followed by `#variant`. Agents without an explicit model inherit the parent session model. The plugin does not map models.
 
+## Model fallback
+
+A subagent can be switched to a fallback model when its primary model is rate limited or out of quota. The orchestrator is excluded: it always runs the model you pick for the session.
+
+Primary models stay where they already are, `agents.<id>.model` in `opencode.jsonc`. The plugin does not duplicate them. `fallback` is a plugin option keyed by agent id, and each value is an ordered list of alternates:
+
+```jsonc
+"options": {
+  "maxParallel": 4,
+  "fallback": {
+    "backend": ["opencode-go/muse-spark-1.3-contributor"],
+    "reviewer": ["opencode-go/muse-spark-1.3-contributor", "opencode-go/another-model"]
+  }
+}
+```
+
+Valid keys are the managed subagents: `explore`, `backend`, `frontend`, `database`, `devops`, `tester`, `reviewer`, `reviewer-security`. Any other key is dropped with a warning. A model string is `provider/model`, optionally `provider/model#variant`; an invalid entry is dropped with a warning, and an empty list disables fallback for that agent.
+
+A 429, a 402, or an error whose message names a rate limit, quota, usage limit, or free-tier limit marks that model unavailable. Availability is tracked per `provider/model`, not per agent, so one exhausted model affects every agent that uses it.
+
+Before a subagent is spawned the plugin picks the first configured model that is not marked unavailable and passes it to the subagent call. When no alternate is available it still tries the last one rather than failing. If a spawn fails on an exhausted model, the plugin retries that one spawn once with the fallback model and no more; a failure on a model that is not exhausted propagates untouched. The host's own retry is switched off for an agent that has fallbacks.
+
+A mark expires after 5 minutes, and the window doubles on each new failure up to 60 minutes. A successful spawn on a model clears its state immediately, so the primary is used again as soon as it works.
+
+The read-only `fallback_status` tool reports each managed agent's primary model, its configured fallbacks, and any model currently in backoff, so you can tell which model a worker will use before spawning it.
+
+Agents without a `fallback` entry are never touched, and the orchestrator is never affected.
+
 ## Configuration
 
 ```jsonc
@@ -104,6 +132,7 @@ Use `provider/model`, optionally followed by `#variant`. Agents without an expli
 - `agent`: ID of the primary orchestrator agent.
 - `maxParallel`: background subagents the orchestrator is told to run at once, 1-8, default 4.
 - `maxReviewers`: reviewer calls per panel including correctness, 1-4, default 2. The cap covers `reviewer` lens calls only; `reviewer-security` is additional when its trigger fires. `1` means the correctness lens only.
+- `fallback`: per-agent ordered fallback models for subagents, default empty. See [Model fallback](#model-fallback).
 
 ## Usage
 
