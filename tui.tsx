@@ -201,7 +201,8 @@ export default Plugin.define({
     let todoTimer: ReturnType<typeof setInterval> | undefined
     createEffect(() => {
       const sessionID = todoAnimFor()
-      const active = sessionID !== undefined && isOpen(sessionID, "todos") && todoItems(sessionID).length > 0
+      const active =
+        sessionID !== undefined && isOpen(sessionID, "todos") && todoItems(sessionID).some((item) => item.status === "in_progress")
       if (active && todoTimer === undefined) {
         todoTimer = setInterval(() => {
           setTodoPhase((value) => value + 3)
@@ -271,7 +272,6 @@ export default Plugin.define({
     }
 
     const todoRow = (item: TodoItem, index: number) => {
-      const done = item.status === "completed" || item.status === "cancelled"
       const marker =
         item.status === "completed"
           ? "✓ "
@@ -280,13 +280,22 @@ export default Plugin.define({
             : item.status === "in_progress"
               ? "● "
               : "○ "
-      const attributes = !done && item.status === "in_progress" ? TextAttributes.BOLD : undefined
+      const colour = () =>
+        item.status === "completed"
+          ? "#50fa7b"
+          : item.status === "cancelled"
+            ? "#ff5555"
+            : item.status === "in_progress"
+              ? hueHex(index, todoPhase())
+              : context.theme.text.muted
+      const attributes =
+        item.status === "in_progress" || item.status === "completed" ? TextAttributes.BOLD : undefined
       return (
         <box flexDirection="row" width="100%" columnGap={1}>
-          <text wrapMode="none" flexShrink={0} fg={done ? context.theme.text.faint : hueHex(index, todoPhase())} attributes={attributes} selectable={false}>
+          <text wrapMode="none" flexShrink={0} fg={colour()} attributes={attributes} selectable={false}>
             {marker}
           </text>
-          <text wrapMode="word" flexShrink={1} minWidth={0} fg={done ? context.theme.text.faint : hueHex(index, todoPhase())} attributes={attributes} selectable={false}>
+          <text wrapMode="word" flexShrink={1} minWidth={0} fg={colour()} attributes={attributes} selectable={false}>
             {item.content}
           </text>
         </box>
