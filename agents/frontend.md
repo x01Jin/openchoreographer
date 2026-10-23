@@ -1,7 +1,7 @@
 ---
 description: Implements and verifies frontend changes
 mode: subagent
-steps: 25
+steps: 600
 color: "#8aadf4"
 permissions:
   - action: subagent

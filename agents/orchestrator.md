@@ -1,7 +1,7 @@
 ---
 description: Plans work, delegates to specialist subagents, and verifies results
 mode: primary
-steps: 60
+steps: 800
 color: "#f5a97f"
 permissions:
   - action: edit

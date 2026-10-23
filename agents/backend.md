@@ -1,7 +1,7 @@
 ---
 description: Implements and verifies backend services, APIs, and integrations
 mode: subagent
-steps: 25
+steps: 600
 color: "#a6da95"
 permissions:
   - action: subagent

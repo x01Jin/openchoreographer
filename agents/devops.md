@@ -1,7 +1,7 @@
 ---
 description: Implements and verifies build, CI, container, and deployment changes
 mode: subagent
-steps: 25
+steps: 400
 color: "#c6a0f6"
 permissions:
   - action: subagent

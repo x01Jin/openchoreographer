@@ -1,7 +1,7 @@
 ---
 description: Strict read-only security review of a diff
 mode: subagent
-steps: 12
+steps: 800
 color: "#ee99a0"
 permissions:
   - action: edit
