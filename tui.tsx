@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import { isReviewer } from "./shared"
 
@@ -66,6 +66,23 @@ function hashColor(id: string): string {
 
 function agentColor(agent: AgentInfo | undefined, id: string | undefined): string {
   return agent?.color ?? hashColor(id ?? "unknown")
+}
+
+function hueHex(index: number, phase: number): string {
+  const hue = (((index * 47 + phase) % 360) + 360) % 360
+  const chroma = (1 - Math.abs(2 * 0.65 - 1)) * 0.7
+  const segment = hue / 60
+  const second = chroma * (1 - Math.abs((segment % 2) - 1))
+  const match = 0.65 - chroma / 2
+  const [r, g, b] =
+    segment < 1 ? [chroma, second, 0] :
+    segment < 2 ? [second, chroma, 0] :
+    segment < 3 ? [0, chroma, second] :
+    segment < 4 ? [0, second, chroma] :
+    segment < 5 ? [second, 0, chroma] :
+    [chroma, 0, second]
+  const channel = (value: number) => Math.round((value + match) * 255).toString(16).padStart(2, "0")
+  return `#${channel(r)}${channel(g)}${channel(b)}`
 }
 
 const FLOW = ["#8aadf4", "#b4befe", "#c6a0f6", "#f5c2e7", "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#94e2d5", "#89dceb"]
@@ -179,6 +196,20 @@ export default Plugin.define({
     const todoDone = (sessionID: string) =>
       todoItems(sessionID).filter((item) => item.status === "completed" || item.status === "cancelled").length
 
+    const [todoPhase, setTodoPhase] = createSignal(0)
+    const [todoAnimFor, setTodoAnimFor] = createSignal<string | undefined>(undefined)
+    let todoTimer: ReturnType<typeof setInterval> | undefined
+    createEffect(() => {
+      const sessionID = todoAnimFor()
+      const active = sessionID !== undefined && isOpen(sessionID, "todos") && todoItems(sessionID).length > 0
+      if (active && todoTimer === undefined) {
+        todoTimer = setInterval(() => setTodoPhase((value) => value + 1), 800)
+      } else if (!active && todoTimer !== undefined) {
+        clearInterval(todoTimer)
+        todoTimer = undefined
+      }
+    })
+
     const header = (sessionID: string, section: Section, title: string, count: () => string | number, small = false) => (
       <box
         width="100%"
@@ -236,7 +267,7 @@ export default Plugin.define({
       )
     }
 
-    const todoRow = (item: TodoItem) => {
+    const todoRow = (item: TodoItem, index: number) => {
       const done = item.status === "completed" || item.status === "cancelled"
       const marker =
         item.status === "completed"
@@ -246,17 +277,14 @@ export default Plugin.define({
             : item.status === "in_progress"
               ? "● "
               : "○ "
-      const color = done
-        ? context.theme.text.faint
-        : item.status === "in_progress"
-          ? context.theme.text.base
-          : context.theme.text.muted
+      const color = done ? context.theme.text.faint : hueHex(index, todoPhase())
+      const attributes = !done && item.status === "in_progress" ? TextAttributes.BOLD : undefined
       return (
         <box flexDirection="row" width="100%" columnGap={1}>
-          <text wrapMode="none" flexShrink={0} fg={color} selectable={false}>
+          <text wrapMode="none" flexShrink={0} fg={color} attributes={attributes} selectable={false}>
             {marker}
           </text>
-          <text wrapMode="word" flexShrink={1} minWidth={0} fg={color} selectable={false}>
+          <text wrapMode="word" flexShrink={1} minWidth={0} fg={color} attributes={attributes} selectable={false}>
             {item.content}
           </text>
         </box>
@@ -301,6 +329,7 @@ export default Plugin.define({
       render: ({ sessionID }) => {
         tick()
         seen.add(sessionID)
+        setTodoAnimFor(sessionID)
         const run = running(sessionID)
         return (
           <box flexDirection="column" gap={0} width="100%">
@@ -330,9 +359,9 @@ export default Plugin.define({
               </Show>
             </Show>
             <Show when={todoItems(sessionID).length > 0}>
-              <box flexDirection="column" width="100%">
+              <box flexDirection="column" width="100%" marginTop={1}>
                 {header(sessionID, "todos", "TODOS", () => `${todoDone(sessionID)}/${todoItems(sessionID).length}`)}
-                <Show when={isOpen(sessionID, "todos")}><For each={todoItems(sessionID).slice(0, TODO_LIMIT)}>{(item) => todoRow(item)}</For></Show>
+                <Show when={isOpen(sessionID, "todos")}><For each={todoItems(sessionID).slice(0, TODO_LIMIT)}>{(item, index) => todoRow(item, index())}</For></Show>
               </box>
             </Show>
           </box>
@@ -349,6 +378,7 @@ export default Plugin.define({
       unregister()
       offListen()
       if (timer !== undefined) clearTimeout(timer)
+      if (todoTimer !== undefined) clearInterval(todoTimer)
     }
   },
 })

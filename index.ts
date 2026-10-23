@@ -203,6 +203,30 @@ export default Plugin.define({
             execute: async (input, { sessionID }) => {
               const parsed = parseTodos((input as { todos?: unknown } | undefined)?.todos)
               const session = await ctx.session.get({ sessionID })
+              const stored = session.metadata?.[TODOS_KEY]
+              const prev = new Map<string, TodoStatus>()
+              if (Array.isArray(stored)) {
+                for (const entry of stored as unknown[]) {
+                  if (
+                    typeof entry === "object" &&
+                    entry !== null &&
+                    typeof (entry as { content?: unknown }).content === "string" &&
+                    typeof (entry as { status?: unknown }).status === "string" &&
+                    STATUSES.includes((entry as { status: string }).status as TodoStatus)
+                  ) {
+                    prev.set((entry as { content: string }).content, (entry as { status: string }).status as TodoStatus)
+                  }
+                }
+              }
+              // One step per write. Anything not already completed counts as newly completed, so marking everything in_progress in one write and completing it in the next cannot batch-complete a list.
+              const newlyCompleted = parsed.filter(
+                (item) => item.status === "completed" && prev.get(item.content) !== "completed",
+              )
+              if (newlyCompleted.length > 1) {
+                throw new Error(
+                  `Refused: ${newlyCompleted.length} items completed in one write. Complete at most one step per write: mark it in_progress, do the work, then mark it completed in the next write.`,
+                )
+              }
               const rows: Array<Record<string, string>> = parsed.map((item) => {
                 const row: Record<string, string> = { id: item.id, content: item.content, status: item.status }
                 if (item.priority) row.priority = item.priority
@@ -268,11 +292,12 @@ export default Plugin.define({
             event.system.push({
               type: "text",
               text: `TODO discipline:
-- On a multi-step task, write the todo list before the first tool call.
-- Mark an item in_progress when work on it starts.
-- Mark it completed immediately when it is done, not at the end of the turn.
-- Never end a turn with open items unless blocked; say what blocks it.
-- One item per verifiable action.`,
+- Write the list before the first tool call on any task with more than two steps.
+- Update it AT EVERY STEP TRANSITION: in one write, mark the finished step completed and the next step in_progress.
+- Never batch updates to the end of the task; a list written once and reconciled at the end is not a ledger.
+- If a new step appears mid-task, add it in that same write.
+- One item per verifiable action, phrased as the action, not the goal.
+- Never end a turn with an item still in_progress or pending unless blocked; say what blocks it.`,
             })
             delete event.tools.edit
             delete event.tools.write
