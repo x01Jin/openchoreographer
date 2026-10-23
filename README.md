@@ -43,17 +43,17 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 
 ## Agents
 
-| id | mode | steps | role | allowed |
+| id | mode | default steps | role | allowed |
 | --- | --- | --- | --- | --- |
-| `orchestrator` | primary | 60 | plans, delegates, verifies | read, `diff`, subagents |
-| `explore` | subagent | 10 | read-only recon, returns a location map | read only |
-| `backend` | subagent | 25 | services, APIs, integrations | edit + shell on assigned files |
-| `frontend` | subagent | 25 | components, state, styling, accessibility | edit + shell on assigned files |
-| `database` | subagent | 25 | schemas, migrations, queries | edit + shell on assigned files |
-| `devops` | subagent | 25 | build, CI, containers, deploys | edit + shell on assigned files |
-| `tester` | subagent | 20 | reproduces bugs, writes tests, reports results | edit + shell on assigned files |
-| `reviewer` | subagent | 15 | strict read-only review through one lens | `diff`, read only |
-| `reviewer-security` | subagent | 12 | strict read-only security review | `diff`, read only |
+| `orchestrator` | primary | 90 | plans, delegates, verifies | read, `diff`, subagents |
+| `explore` | subagent | 50 | read-only recon, returns a location map | read only |
+| `backend` | subagent | 80 | services, APIs, integrations | edit + shell on assigned files |
+| `frontend` | subagent | 80 | components, state, styling, accessibility | edit + shell on assigned files |
+| `database` | subagent | 60 | schemas, migrations, queries | edit + shell on assigned files |
+| `devops` | subagent | 60 | build, CI, containers, deploys | edit + shell on assigned files |
+| `tester` | subagent | 70 | reproduces bugs, writes tests, reports results | edit + shell on assigned files |
+| `reviewer` | subagent | 40 | strict read-only review through one lens | `diff`, read only |
+| `reviewer-security` | subagent | 35 | strict read-only security review | `diff`, read only |
 
 The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected as one `id — label: hint` line per lens, not copied into the agent files.
 
@@ -151,9 +151,9 @@ Agents without a `fallback` entry are never touched, and the orchestrator is nev
 - `Agent roster`: shows or hides the AGENTS & MODELS block (PRIMARY, WORKERS, REVIEWERS). The RUNNING list stays visible while subagents run, even with the roster hidden.
 - One row per managed agent with its step budget.
 
-Arrow keys move, left and right change a step budget by 5, enter toggles an animation or a switch, `r` resets a step budget to the value in the agent file, and escape closes. Click a row to select it, click `−` or `+` to change a budget, and use the wheel to scroll.
+Arrow keys move, left and right change a step budget by 5, enter toggles an animation or a switch, `r` resets a step budget to its default, and escape closes. Click a row to select it, click `−` or `+` to change a budget, and use the wheel to scroll.
 
-Step budgets live in the plugin's durable storage and are applied through an agent transform when the agent definitions reload. The `steps:` line in `agents/<name>.md` stays the default; a value set in the dialog overrides it until you reset it. Values are clamped to 1-200.
+The dialog writes `steps:` into the agent definition file (`~/.config/opencode/agents/<id>.md`, or `.opencode/agents` when the project has one). The host reloads the agent when that file changes. `STEP_DEFAULTS` in `shared.ts` is the reset target, and no step value is stored in the plugin's own settings. A budget set in the dialog is written to the file, the default in `STEP_DEFAULTS` is what `r` writes back, and the panel and the file therefore always show the same number. Values are clamped to 1-2000.
 
 Turning an animation off stops its timer, including the 60ms repaint loop the todo animation drove.
 

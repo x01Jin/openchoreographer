@@ -1,9 +1,13 @@
+import { lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { Plugin } from "@opencode/plugin"
 import {
   AGENT_IDS,
   EXPLORE_ID,
   MAX_DIFF_CHARS,
   REVIEWER_IDS,
+  STEP_DEFAULTS,
   STRICT_REVIEW_PROTOCOL,
   WORKER_IDS,
   buildDelegationText,
@@ -21,7 +25,7 @@ import {
 } from "./shared"
 import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "./fallback"
 import { ChoreographerRpc } from "./rpc"
-import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, sameSteps, type SettingsSnapshot } from "./settings"
+import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type SettingsSnapshot } from "./settings"
 
 type Registration = { dispose: () => Promise<void> }
 
@@ -179,6 +183,66 @@ function countTodos(list: TodoItem[]): TodoCounts {
   return counts
 }
 
+export function agentDirs(location: { directory: string }): string[] {
+  const candidates = [
+    join(location.directory, ".opencode", "agents"),
+    join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode", "agents"),
+  ]
+  return [...new Set(candidates)]
+}
+
+const MAX_AGENT_FILE_BYTES = 1_000_000
+
+function agentFilePath(dirs: readonly string[], id: string): string | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) return undefined
+  for (const dir of dirs) {
+    const path = join(dir, `${id}.md`)
+    try {
+      if (!lstatSync(path).isFile()) continue
+      const real = realpathSync(path)
+      const root = realpathSync(dir)
+      if (real.toLowerCase() !== join(root, `${id}.md`).toLowerCase()) continue
+      if (statSync(path).size > MAX_AGENT_FILE_BYTES) continue
+      return path
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+export function readAgentSteps(dirs: readonly string[], id: string): number | null {
+  const path = agentFilePath(dirs, id)
+  if (path === undefined) return null
+  let content: string
+  try {
+    content = readFileSync(path, "utf8")
+  } catch {
+    return null
+  }
+  const match = content.match(/^steps:[ \t]*["']?(-?\d+)/m)
+  if (!match) return null
+  const n = Number(match[1])
+  if (!Number.isFinite(n)) return null
+  return clampSteps(n)
+}
+
+export function writeAgentSteps(dirs: readonly string[], id: string, value: number): void {
+  const path = agentFilePath(dirs, id)
+  if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
+  const content = readFileSync(path, "utf8")
+  const line = `steps: ${value}`
+  const existing = /^steps:[^\n]*$/m
+  if (existing.test(content)) {
+    const next = content.replace(existing, line)
+    if (next !== content) writeFileSync(path, next, "utf8")
+    return
+  }
+  if (!/^---[ \t]*\r?$/m.test(content)) throw new Error("openchoreographer: agent frontmatter not found")
+  const next = content.replace(/^(---[ \t]*)(\r?\n)/m, (_, prefix, eol) => `${prefix}${eol}${line}${eol}`)
+  if (next !== content) writeFileSync(path, next, "utf8")
+}
+
 export default Plugin.define({
   id: "openchoreographer",
   async setup(ctx) {
@@ -189,7 +253,7 @@ export default Plugin.define({
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
     const options = normalizeOptions(ctx.options)
     const registrations: Registration[] = []
-    const managedIds = [...new Set([options.agent, ...AGENT_IDS])]
+    const managedIds = [...new Set([options.agent, ...AGENT_IDS])].filter((id) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id))
     let reloadTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     const scheduleReload = () => {
@@ -202,39 +266,76 @@ export default Plugin.define({
     }
     try {
       let stored: unknown = undefined
+      let storedOk = true
       try {
         stored = await ctx.storage.get(SETTINGS_KEY)
       } catch (error) {
         console.warn(`openchoreographer: settings unavailable, using defaults: ${error instanceof Error ? error.message : String(error)}`)
+        storedOk = false
         stored = defaultSettings()
       }
-      const settings = { current: normalizeSettings(stored, managedIds) }
-      const defaults: Record<string, number | null> = {}
-      let captured = false
-      const seen = new Set<string>()
-      registrations.push(
-        await ctx.agent.transform((editor) => {
-          for (const id of managedIds) {
-            const agent = editor.get(id)
-            if (!agent) continue
-            seen.add(id)
-            if (!captured) defaults[id] = agent.steps === undefined ? null : clampSteps(agent.steps)
-            const override = settings.current.steps[id]
-            if (override !== undefined) agent.steps = override
+      // The file is the source of step values and STEP_DEFAULTS is only the reset target, so a step override saved
+      // under the old model is stale and would mask the new defaults. Clear those overrides once; ui and animations survive.
+      let settingsVersion: unknown = undefined
+      try {
+        settingsVersion = await ctx.storage.get("settingsVersion")
+      } catch {
+        settingsVersion = undefined
+      }
+      const normalized = normalizeSettings(stored, managedIds)
+      if (settingsVersion !== 3) {
+        normalized.steps = {}
+        if (storedOk) {
+          try {
+            await ctx.storage.set(SETTINGS_KEY, normalized)
+            await ctx.storage.set("settingsVersion", 3)
+          } catch (error) {
+            console.warn(`openchoreographer: settings migration failed, using defaults: ${error instanceof Error ? error.message : String(error)}`)
           }
-          if (managedIds.every((id) => seen.has(id))) captured = true
-        }),
-      )
-      await ctx.agent.list()
-      const snapshot = (): SettingsSnapshot => ({ animations: settings.current.animations, ui: settings.current.ui, steps: settings.current.steps, defaults, managed: managedIds })
+        }
+      }
+      const settings = { current: normalized }
+      const dirs = agentDirs(ctx.location)
+      let fileSteps: Record<string, number> = {}
+      for (const id of managedIds) {
+        const value = readAgentSteps(dirs, id)
+        if (value !== null) fileSteps[id] = value
+      }
+      const snapshot = (): SettingsSnapshot => ({ animations: settings.current.animations, ui: settings.current.ui, steps: { ...fileSteps }, defaults: Object.fromEntries(managedIds.map((id) => [id, STEP_DEFAULTS[id] ?? null])), managed: managedIds })
       let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
       const rpc = await ctx.rpc.register(ChoreographerRpc, {
-        getSettings: async () => snapshot(),
+        getSettings: async () => {
+          const next: Record<string, number> = {}
+          for (const id of managedIds) {
+            const value = readAgentSteps(dirs, id)
+            if (value !== null) next[id] = value
+          }
+          fileSteps = next
+          return snapshot()
+        },
         setSettings: async (input) => {
-          const stepsBefore = settings.current.steps
           settings.current = mergeSettings(settings.current, input, managedIds)
+          settings.current.steps = {}
+          const patch = (typeof input === "object" && input !== null ? input : undefined) as { steps?: unknown } | undefined
+          if (patch !== undefined && patch.steps !== null && typeof patch.steps === "object" && !Array.isArray(patch.steps)) {
+            const stepsPatch = patch.steps as Record<string, unknown>
+            const targets: { id: string; path: string; value: number }[] = []
+            for (const id of managedIds) {
+              const raw = stepsPatch[id]
+              const value =
+                raw === null ? STEP_DEFAULTS[id] : typeof raw === "number" ? clampSteps(raw) : undefined
+              if (value === undefined) continue
+              const path = agentFilePath(dirs, id)
+              if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
+              targets.push({ id, path, value })
+            }
+            for (const target of targets) {
+              writeAgentSteps(dirs, target.id, target.value)
+              fileSteps[target.id] = target.value
+            }
+            scheduleReload()
+          }
           await ctx.storage.set(SETTINGS_KEY, settings.current)
-          if (!sameSteps(stepsBefore, settings.current.steps)) scheduleReload()
           const snap = snapshot()
           if (emitUpdated) await emitUpdated(snap)
           return snap

@@ -1,8 +1,10 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  AGENT_IDS,
   LENSES,
   MAX_RESULT_CHARS,
+  STEP_DEFAULTS,
   buildDelegationText,
   buildReviewBrief,
   clipResult,
@@ -10,6 +12,7 @@ import {
   validateDiffInput,
   type Options,
 } from "../shared"
+import { STEPS_MAX, STEPS_MIN } from "../settings"
 
 function options(overrides: Partial<Options> = {}): Options {
   return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, fallback: {}, ...overrides }
@@ -285,5 +288,16 @@ describe("buildDelegationText", () => {
   test("states the configured maxParallel number", () => {
     assert.match(buildDelegationText(options({ maxParallel: 6 })), /keeping at most 6 background subagents at once/)
     assert.match(buildDelegationText(options({ maxParallel: 1 })), /keeping at most 1 background subagents at once/)
+  })
+})
+
+describe("STEP_DEFAULTS", () => {
+  test("covers every managed agent with an integer inside the settings range", () => {
+    for (const id of AGENT_IDS) {
+      const budget = STEP_DEFAULTS[id]
+      assert.equal(typeof budget, "number", `missing default for ${id}`)
+      assert.ok(Number.isInteger(budget), `non-integer default for ${id}`)
+      assert.ok(budget >= STEPS_MIN && budget <= STEPS_MAX, `default for ${id} outside ${STEPS_MIN}..${STEPS_MAX}`)
+    }
   })
 })

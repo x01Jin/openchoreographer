@@ -1,8 +1,8 @@
 ---
 description: Implements and verifies schemas, migrations, queries, and indexes
 mode: subagent
-steps: 400
 color: "#eed49f"
+steps: 60
 permissions:
   - action: subagent
     resource: "*"

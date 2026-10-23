@@ -9,7 +9,7 @@ export type SettingsSnapshot = {
   managed: string[]
 }
 export const STEPS_MIN = 1
-export const STEPS_MAX = 200
+export const STEPS_MAX = 2000
 export const STEPS_STEP = 5
 export const SETTINGS_KEY = "settings"
 

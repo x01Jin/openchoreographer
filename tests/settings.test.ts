@@ -20,9 +20,9 @@ describe("normalizeSettings", () => {
   })
 
   test("clamps steps and drops empty-string and non-finite entries", () => {
-    assert.deepEqual(normalizeSettings({ steps: { a: 0, b: 999, c: 12.4, "": 10, d: Number.NaN, e: null } }).steps, {
+    assert.deepEqual(normalizeSettings({ steps: { a: 0, b: 2001, c: 12.4, "": 10, d: Number.NaN, e: null } }).steps, {
       a: 1,
-      b: 200,
+      b: 2000,
       c: 12,
     })
   })
@@ -60,9 +60,10 @@ describe("normalizeSettings", () => {
 })
 
 describe("clampSteps", () => {
-  test("clamps and rounds to the 1..200 range", () => {
+  test("clamps and rounds to the 1..2000 range", () => {
     assert.equal(clampSteps(0), 1)
-    assert.equal(clampSteps(201), 200)
+    assert.equal(clampSteps(201), 201)
+    assert.equal(clampSteps(2001), 2000)
     assert.equal(clampSteps(12.6), 13)
     assert.equal(clampSteps(Number.NaN), 1)
     assert.equal(clampSteps(Number.POSITIVE_INFINITY), 1)
@@ -89,7 +90,7 @@ describe("mergeSettings", () => {
     const current = mergeSettings(defaultSettings(), { steps: { backend: 40 } }, ["backend"])
     assert.equal(mergeSettings(current, { steps: { backend: null } }, ["backend"]).steps.backend, undefined)
     assert.equal(mergeSettings(defaultSettings(), { steps: { backend: 0 } }, ["backend"]).steps.backend, 1)
-    assert.equal(mergeSettings(defaultSettings(), { steps: { backend: 999 } }, ["backend"]).steps.backend, 200)
+    assert.equal(mergeSettings(defaultSettings(), { steps: { backend: 2001 } }, ["backend"]).steps.backend, 2000)
     assert.equal(mergeSettings(defaultSettings(), { steps: { backend: 12.4 } }, ["backend"]).steps.backend, 12)
   })
 

@@ -1,8 +1,8 @@
 ---
 description: Strict read-only review of a diff through one lens
 mode: subagent
-steps: 800
 color: "#ed8796"
+steps: 40
 permissions:
   - action: edit
     resource: "*"

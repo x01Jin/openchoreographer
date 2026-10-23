@@ -397,7 +397,7 @@ export default Plugin.define({
                 <text fg={accent} selectable={false}>+</text>
               </box>
               <Show when={changed()}>
-                <text fg={context.theme.text.faint} selectable={false}>{`file ${file()}`}</text>
+                <text fg={context.theme.text.faint} selectable={false}>{`default ${file()}`}</text>
               </Show>
             </box>
           </box>
