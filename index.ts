@@ -292,7 +292,7 @@ export default Plugin.define({
             event.system.push({
               type: "text",
               text: `TODO discipline:
-- Write the list before the first tool call on any task with more than two steps.
+- Write the list before the first tool call.
 - Update it AT EVERY STEP TRANSITION: in one write, mark the finished step completed and the next step in_progress.
 - Never batch updates to the end of the task; a list written once and reconciled at the end is not a ledger.
 - If a new step appears mid-task, add it in that same write.
