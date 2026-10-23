@@ -203,7 +203,10 @@ export default Plugin.define({
       const sessionID = todoAnimFor()
       const active = sessionID !== undefined && isOpen(sessionID, "todos") && todoItems(sessionID).length > 0
       if (active && todoTimer === undefined) {
-        todoTimer = setInterval(() => setTodoPhase((value) => value + 1), 800)
+        todoTimer = setInterval(() => {
+          setTodoPhase((value) => value + 3)
+          context.renderer.requestRender()
+        }, 60)
       } else if (!active && todoTimer !== undefined) {
         clearInterval(todoTimer)
         todoTimer = undefined
@@ -277,14 +280,13 @@ export default Plugin.define({
             : item.status === "in_progress"
               ? "● "
               : "○ "
-      const color = done ? context.theme.text.faint : hueHex(index, todoPhase())
       const attributes = !done && item.status === "in_progress" ? TextAttributes.BOLD : undefined
       return (
         <box flexDirection="row" width="100%" columnGap={1}>
-          <text wrapMode="none" flexShrink={0} fg={color} attributes={attributes} selectable={false}>
+          <text wrapMode="none" flexShrink={0} fg={done ? context.theme.text.faint : hueHex(index, todoPhase())} attributes={attributes} selectable={false}>
             {marker}
           </text>
-          <text wrapMode="word" flexShrink={1} minWidth={0} fg={color} attributes={attributes} selectable={false}>
+          <text wrapMode="word" flexShrink={1} minWidth={0} fg={done ? context.theme.text.faint : hueHex(index, todoPhase())} attributes={attributes} selectable={false}>
             {item.content}
           </text>
         </box>
