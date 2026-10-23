@@ -20,6 +20,8 @@ import {
   type ValidatedDiffInput,
 } from "./shared"
 import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "./fallback"
+import { ChoreographerRpc } from "./rpc"
+import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, sameSteps, type SettingsSnapshot } from "./settings"
 
 type Registration = { dispose: () => Promise<void> }
 
@@ -187,7 +189,59 @@ export default Plugin.define({
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
     const options = normalizeOptions(ctx.options)
     const registrations: Registration[] = []
+    const managedIds = [...new Set([options.agent, ...AGENT_IDS])]
+    let reloadTimer: ReturnType<typeof setTimeout> | undefined
+    let disposed = false
+    const scheduleReload = () => {
+      if (reloadTimer !== undefined) return
+      reloadTimer = setTimeout(() => {
+        reloadTimer = undefined
+        if (disposed) return
+        void ctx.agent.reload().catch((error) => console.warn(`openchoreographer: agent reload failed: ${error instanceof Error ? error.message : String(error)}`))
+      }, 50)
+    }
     try {
+      let stored: unknown = undefined
+      try {
+        stored = await ctx.storage.get(SETTINGS_KEY)
+      } catch (error) {
+        console.warn(`openchoreographer: settings unavailable, using defaults: ${error instanceof Error ? error.message : String(error)}`)
+        stored = defaultSettings()
+      }
+      const settings = { current: normalizeSettings(stored, managedIds) }
+      const defaults: Record<string, number | null> = {}
+      let captured = false
+      const seen = new Set<string>()
+      registrations.push(
+        await ctx.agent.transform((editor) => {
+          for (const id of managedIds) {
+            const agent = editor.get(id)
+            if (!agent) continue
+            seen.add(id)
+            if (!captured) defaults[id] = agent.steps === undefined ? null : clampSteps(agent.steps)
+            const override = settings.current.steps[id]
+            if (override !== undefined) agent.steps = override
+          }
+          if (managedIds.every((id) => seen.has(id))) captured = true
+        }),
+      )
+      await ctx.agent.list()
+      const snapshot = (): SettingsSnapshot => ({ animations: settings.current.animations, ui: settings.current.ui, steps: settings.current.steps, defaults, managed: managedIds })
+      let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
+      const rpc = await ctx.rpc.register(ChoreographerRpc, {
+        getSettings: async () => snapshot(),
+        setSettings: async (input) => {
+          const stepsBefore = settings.current.steps
+          settings.current = mergeSettings(settings.current, input, managedIds)
+          await ctx.storage.set(SETTINGS_KEY, settings.current)
+          if (!sameSteps(stepsBefore, settings.current.steps)) scheduleReload()
+          const snap = snapshot()
+          if (emitUpdated) await emitUpdated(snap)
+          return snap
+        },
+      })
+      registrations.push(rpc)
+      emitUpdated = (snap) => rpc.events.emit("updated", snap)
       registrations.push(
         await ctx.session.hook("retry", (event) => {
           if (!isQuotaError(event.error)) return
@@ -283,7 +337,7 @@ export default Plugin.define({
               let baseline: ReadonlySet<string> | undefined
               try {
                 // The baseline is status-based: a file already dirty at spawn and edited further is not detected.
-                if (agent !== undefined && (options.fallback[agent]?.length ?? 0) > 0) {
+                if (agent !== undefined && options.fallback[agent]?.length) {
                   const tree = await readTree(ctx)
                   if (tree !== undefined) baseline = new Set(tree.map(treeKey))
                 }
@@ -296,7 +350,7 @@ export default Plugin.define({
                 const message = error instanceof Error ? error.message : String(error)
                 if (/abort|cancel/i.test(message)) throw error
                 if (agent === undefined) throw error
-                const alternates = options.fallback[agent]
+                const alternates = options.fallback[agent] ?? []
                 if (used === undefined || alternates === undefined || alternates.length === 0) throw error
                 if (!isQuotaError({ message }) && breaker.available(used)) throw error
                 breaker.fail(used)
@@ -585,6 +639,11 @@ export default Plugin.define({
       }
       active = registrations
       return async () => {
+        disposed = true
+        if (reloadTimer !== undefined) {
+          clearTimeout(reloadTimer)
+          reloadTimer = undefined
+        }
         const pending = [...registrations].reverse()
         registrations.length = 0
         if (active === registrations) {

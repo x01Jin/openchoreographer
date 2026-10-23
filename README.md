@@ -141,13 +141,33 @@ Agents without a `fallback` entry are never touched, and the orchestrator is nev
 - `maxReviewers`: reviewer calls per panel including correctness, 1-4, default 2. The cap covers `reviewer` lens calls only; `reviewer-security` is additional when its trigger fires. `1` means the correctness lens only.
 - `fallback`: per-agent ordered fallback models for subagents, default empty. See [Model fallback](#model-fallback).
 
+## Settings
+
+`/choreographer` opens a settings dialog.
+
+- `TODO animations`: the colour cycle on in-progress todo rows.
+- `RUNNING animations`: the flowing RUNNING label.
+- `TODO panel`: shows or hides the TODOS section in the sidebar.
+- `Agent roster`: shows or hides the AGENTS & MODELS block (PRIMARY, WORKERS, REVIEWERS). The RUNNING list stays visible while subagents run, even with the roster hidden.
+- One row per managed agent with its step budget.
+
+Arrow keys move, left and right change a step budget by 5, enter toggles an animation or a switch, `r` resets a step budget to the value in the agent file, and escape closes. Click a row to select it, click `−` or `+` to change a budget, and use the wheel to scroll.
+
+Step budgets live in the plugin's durable storage and are applied through an agent transform when the agent definitions reload. The `steps:` line in `agents/<name>.md` stays the default; a value set in the dialog overrides it until you reset it. Values are clamped to 1-200.
+
+Turning an animation off stops its timer, including the 60ms repaint loop the todo animation drove.
+
+The `TODO panel` switch only hides the sidebar section; `todowrite` and `todoread` keep working, so the list returns intact when it is turned back on.
+
+The dialog talks to the plugin's server entry over RPC. If that entry is not running, the animation and interface toggles apply from the TUI's own storage and the agent rows are unavailable.
+
 ## Usage
 
 ```text
 opencode run --agent orchestrator --auto "Add a retry with backoff to the upload client and run the relevant tests."
 ```
 
-If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default. Use `/orchestrate` to switch an existing session, `/review-panel` for a strict review of the current changes.
+If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default. Use `/orchestrate` to switch an existing session, `/review-panel` for a strict review of the current changes, and `/choreographer` for the settings dialog.
 
 ## Development
 

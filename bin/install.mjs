@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_DIR_NAME = "openchoreographer";
-const PLUGIN_FILES = ["index.ts", "tui.tsx", "shared.ts", "fallback.ts", "package.json", "README.md", "LICENSE"];
+const PLUGIN_FILES = ["index.ts", "tui.tsx", "shared.ts", "fallback.ts", "rpc.ts", "settings.ts", "package.json", "README.md", "LICENSE"];
 const RETIRED_AGENT_FILES = [
   "reviewer-general.md",
   "reviewer-oop.md",
