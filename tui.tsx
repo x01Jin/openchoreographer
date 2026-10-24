@@ -1,155 +1,15 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
-import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
-import { TextAttributes } from "@opentui/core"
-import type { ScrollBoxRenderable } from "@opentui/core"
-import { displayWidth, isReviewer, isSidebarStatusEvent, shouldRefreshSidebar } from "./shared"
-import { STEPS_STEP, clampSteps, defaultSettings, normalizeSnapshot } from "./settings"
-import type { ChoreographerSettings, Ui } from "./settings"
-import { ChoreographerRpc } from "./rpc"
-
-type ModelRefLike = { id: string; providerID: string; variant?: string }
-
-type Section = "agents" | "primary" | "workers" | "reviewers" | "todos"
-
-type TodoItem = {
-  id?: string
-  content: string
-  status: "pending" | "in_progress" | "completed" | "cancelled"
-}
-
-const NAME_WIDTH = 15
-const MODEL_WIDTH = 15
-const TODO_LIMIT = 12
-
-const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
-
-function normalizeTodoStatus(value: unknown): TodoItem["status"] {
-  return typeof value === "string" && TODO_STATUSES.includes(value)
-    ? (value as TodoItem["status"])
-    : "pending"
-}
-
-type GraphemeSegmenter = { segment(value: string): Iterable<{ segment: string }> }
-
-function createSegmenter(): GraphemeSegmenter | undefined {
-  try {
-    const Ctor = (Intl as unknown as { Segmenter?: new (locales?: string, options?: { granularity: string }) => GraphemeSegmenter }).Segmenter
-    return Ctor ? new Ctor(undefined, { granularity: "grapheme" }) : undefined
-  } catch {
-    return undefined
-  }
-}
-
-const segmenter = createSegmenter()
-
-function sanitize(value: string): string {
-  return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
-}
-
-const truncateCache = new Map<string, string>()
-
-function truncate(value: string, width: number): string {
-  const key = `${width}:${value}`
-  const hit = truncateCache.get(key)
-  if (hit !== undefined) return hit
-  const clean = sanitize(value)
-  let result: string
-  if (/^[\x00-\x7F]*$/.test(clean) && clean.length <= width) {
-    result = clean
-  } else {
-    const cells = segmenter ? Array.from(segmenter.segment(clean), (part) => part.segment) : Array.from(clean)
-    let total = 0
-    for (const cell of cells) total += displayWidth(cell)
-    if (total <= width) result = clean
-    else {
-      let used = 0
-      let end = 0
-      for (; end < cells.length; end += 1) {
-        const cellWidth = displayWidth(cells[end])
-        if (used + cellWidth > width - 1) break
-        used += cellWidth
-      }
-      result = cells.slice(0, end).join("") + "…"
-    }
-  }
-  if (truncateCache.size > 512) truncateCache.clear()
-  truncateCache.set(key, result)
-  return result
-}
-
-function modelName(ref: ModelRefLike, index: Map<string, string>): string {
-  const name = index.get(`${ref.providerID}/${ref.id}`) ?? `${ref.providerID}/${ref.id}`
-  return ref.variant ? `${name}#${ref.variant}` : name
-}
-
-const PALETTE = ["#8aadf4", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6", "#8bd5ca", "#ed8796", "#ee99a0"]
-
-function hashColor(id: string): string {
-  let hash = 0
-  for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0
-  return PALETTE[hash % PALETTE.length]
-}
-
-function agentColor(agent: AgentInfo | undefined, id: string | undefined): string {
-  return agent?.color ?? hashColor(id ?? "unknown")
-}
-
-function hueHex(index: number, phase: number): string {
-  const hue = (((index * 47 + phase) % 360) + 360) % 360
-  const chroma = (1 - Math.abs(2 * 0.65 - 1)) * 0.7
-  const segment = hue / 60
-  const second = chroma * (1 - Math.abs((segment % 2) - 1))
-  const match = 0.65 - chroma / 2
-  const [r, g, b] =
-    segment < 1 ? [chroma, second, 0] :
-    segment < 2 ? [second, chroma, 0] :
-    segment < 3 ? [0, chroma, second] :
-    segment < 4 ? [0, second, chroma] :
-    segment < 5 ? [second, 0, chroma] :
-    [chroma, 0, second]
-  const channel = (value: number) => Math.round((value + match) * 255).toString(16).padStart(2, "0")
-  return `#${channel(r)}${channel(g)}${channel(b)}`
-}
-
-const FLOW = ["#8aadf4", "#b4befe", "#c6a0f6", "#f5c2e7", "#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#94e2d5", "#89dceb"]
-
-function FlowingLabel(props: { text: string; animate: boolean }) {
-  const [phase, setPhase] = createSignal(0)
-  createEffect(() => {
-    if (!props.animate) return
-    const timer = setInterval(() => setPhase((value) => value + 1), 140)
-    onCleanup(() => clearInterval(timer))
-  })
-  const slices = createMemo(() => {
-    const all = Array.from(props.text)
-    if (all.length < 3) return [all.join("")]
-    const cut1 = Math.ceil(all.length / 3)
-    const cut2 = Math.ceil((all.length * 2) / 3)
-    return [all.slice(0, cut1).join(""), all.slice(cut1, cut2).join(""), all.slice(cut2).join("")]
-  })
-  return (
-    <Show
-      when={props.animate}
-      fallback={
-        <text fg={FLOW[0]} selectable={false} attributes={TextAttributes.BOLD}>{props.text}</text>
-      }
-    >
-      <Show
-        when={slices().length === 3}
-        fallback={
-          <text fg={FLOW[(phase() + 0) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[0]}</text>
-        }
-      >
-        <box flexDirection="row">
-          <text fg={FLOW[(phase() + 0) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[0]}</text>
-          <text fg={FLOW[(phase() + 3) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[1]}</text>
-          <text fg={FLOW[(phase() + 6) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[2]}</text>
-        </box>
-      </Show>
-    </Show>
-  )
-}
+import { batch, createEffect, createMemo, createSignal } from "solid-js"
+import { isReviewer } from "./src/shared/agents"
+import { isSidebarStatusEvent, shouldRefreshSidebar } from "./src/shared/events"
+import { defaultSettings, normalizeSnapshot } from "./src/shared/settings"
+import type { ChoreographerSettings, Ui } from "./src/shared/settings"
+import { ChoreographerRpc } from "./src/shared/rpc"
+import { modelName, normalizeTodoStatus, sanitize } from "./src/tui/format"
+import type { Section, TodoItem } from "./src/tui/format"
+import { SettingsPanel } from "./src/tui/settings-panel"
+import { Sidebar } from "./src/tui/sidebar"
 
 export default Plugin.define({
   id: "openchoreographer.tui",
@@ -337,210 +197,26 @@ export default Plugin.define({
       queueSteps(id, null)
     }
 
-    type SettingsRow =
-      | { kind: "animation"; key: "todo" | "running"; label: string }
-      | { kind: "ui"; key: "todos" | "roster"; label: string }
-      | { kind: "agent"; id: string; label: string }
-
     const agentById = (id: string): AgentInfo | undefined => (agentList() ?? []).find((agent) => agent.id === id)
 
     const openSettings = () => {
       if (inflight === 0) void syncSettings(false)
       context.ui.dialog.set({ size: "large", centered: true })
-      context.ui.dialog.show(() => <SettingsPanel />)
-    }
-
-    const SettingsPanel = () => {
-      const [selected, setSelected] = createSignal(0)
-      onCleanup(() => {
-        if (pendingSteps.size > 0) flushSteps()
-      })
-      let scrollRef: ScrollBoxRenderable | undefined
-      const rows = createMemo((): SettingsRow[] => {
-        const list: SettingsRow[] = [
-          { kind: "animation", key: "todo", label: "TODO animations" },
-          { kind: "animation", key: "running", label: "RUNNING animations" },
-          { kind: "ui", key: "todos", label: "TODO panel" },
-          { kind: "ui", key: "roster", label: "Agent roster" },
-        ]
-        for (const id of managed()) list.push({ kind: "agent", id, label: truncate(id, 18) })
-        return list
-      })
-      const viewportHeight = () => Math.max(4, Math.floor((context.renderer.height || 32) * 0.5) - 4)
-      const current = () => Math.min(selected(), Math.max(0, rows().length - 1))
-      const reveal = (index: number) => {
-        const id = `choreographer-row-${index}`
-        queueMicrotask(() => scrollRef?.scrollChildIntoView(id))
-      }
-      const move = (delta: number) => {
-        const count = rows().length
-        if (count === 0) return
-        const next = Math.min(count - 1, Math.max(0, current() + delta))
-        setSelected(next)
-        reveal(next)
-      }
-      const adjustRow = (id: string, delta: number) => {
-        const effective = settings.steps[id] ?? defaults()[id] ?? agentById(id)?.steps ?? null
-        saveSteps(id, clampSteps((effective ?? 0) + delta))
-      }
-      const adjust = (delta: number) => {
-        const row = rows()[current()]
-        if (row?.kind === "agent") adjustRow(row.id, delta)
-      }
-      const act = () => {
-        const row = rows()[current()]
-        if (row?.kind === "animation") toggleAnimation(row.key)
-        else if (row?.kind === "ui") toggleUi(row.key)
-      }
-      const reset = () => {
-        const row = rows()[current()]
-        if (row?.kind === "agent") resetSteps(row.id)
-      }
-      context.keymap.layer(() => ({
-        mode: "global",
-        priority: 10,
-        commands: [
-          { bind: "up", run: () => move(-1) },
-          { bind: "down", run: () => move(1) },
-          { bind: "left", run: () => adjust(-STEPS_STEP) },
-          { bind: "right", run: () => adjust(STEPS_STEP) },
-          { bind: "return", run: () => act() },
-          { bind: "space", run: () => act() },
-          { bind: "r", run: () => reset() },
-          { bind: "escape", run: () => context.ui.dialog.clear() },
-        ],
-      }))
-      const rowLine = (row: SettingsRow, index: number) => {
-        const active = () => index === current()
-        const marker = () => (active() ? "▸ " : "  ")
-        const select = () => setSelected(index)
-        const accent = row.kind === "animation" ? FLOW[0] : row.kind === "ui" ? FLOW[1] : agentColor(agentById(row.id), row.id)
-        const label = (
-          <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
-            <text wrapMode="none" fg={accent} attributes={active() ? TextAttributes.BOLD : undefined} selectable={false}>
-              {`${marker()}${row.label}`}
-            </text>
-          </box>
-        )
-        if (row.kind === "animation" || row.kind === "ui") {
-          const on = () => row.kind === "animation" ? settings.animations[row.key] : (settings.ui?.[row.key] ?? true)
-          const toggleRow = () => {
-            if (row.kind === "animation") toggleAnimation(row.key)
-            else toggleUi(row.key)
-          }
-          return (
-            <box
-              flexDirection="row"
-              width="100%"
-              justifyContent="space-between"
-              columnGap={2}
-              onMouseDown={(event) => {
-                if (event.button !== 0 || event.isDragging) return
-                select()
-                toggleRow()
-              }}
-            >
-              {label}
-              <text fg={on() ? "#a6e3a1" : "#f5a97f"} attributes={active() ? TextAttributes.BOLD : undefined} selectable={false}>
-                {on() ? "on" : "off"}
-              </text>
-            </box>
-          )
-        }
-        const override = () => settings.steps[row.id]
-        const file = () => defaults()[row.id]
-        const effective = () => settings.steps[row.id] ?? defaults()[row.id] ?? agentById(row.id)?.steps ?? null
-        const changed = () => override() !== undefined && typeof file() === "number" && file() !== override()
-        const nudge = (delta: number) => (event: { button: number; isDragging?: boolean; stopPropagation: () => void }) => {
-          if (event.button !== 0 || event.isDragging) return
-          event.stopPropagation()
-          select()
-          adjustRow(row.id, delta)
-        }
-        return (
-          <box
-            flexDirection="row"
-            width="100%"
-            justifyContent="space-between"
-            columnGap={2}
-            onMouseDown={(event) => {
-              if (event.button !== 0 || event.isDragging) return
-              select()
-            }}
-          >
-            {label}
-            <box flexDirection="row" columnGap={1} flexShrink={0}>
-              <box onMouseDown={nudge(-STEPS_STEP)}>
-                <text fg={accent} selectable={false}>−</text>
-              </box>
-              <text
-                fg={accent}
-                attributes={active() ? TextAttributes.BOLD : undefined}
-                selectable={false}
-              >
-                {effective() === null ? "—" : `${effective()}`}
-              </text>
-              <box onMouseDown={nudge(STEPS_STEP)}>
-                <text fg={accent} selectable={false}>+</text>
-              </box>
-              <Show when={changed()}>
-                <text fg={context.theme.text.faint} selectable={false}>{`default ${file()}`}</text>
-              </Show>
-            </box>
-          </box>
-        )
-      }
-      const section = (title: string, colour: string) => (
-        <box marginTop={1}>
-          <text fg={colour} attributes={TextAttributes.BOLD} selectable={false}>{title}</text>
-        </box>
-      )
-      return (
-        <box
-          flexDirection="column"
-          width="100%"
-          paddingX={2}
-          paddingY={1}
-        >
-          <box flexDirection="row" width="100%" justifyContent="space-between" alignItems="center">
-            <text fg={context.theme.text.base} attributes={TextAttributes.BOLD} selectable={false}>Choreographer settings</text>
-            <box height={1} onMouseDown={(event) => { if (event.button === 0) context.ui.dialog.clear() }}>
-              <text fg={context.theme.text.muted} attributes={TextAttributes.BOLD} selectable={false}>[esc]</text>
-            </box>
-          </box>
-          <box width="100%" overflow="hidden">
-            <text fg={context.theme.text.faint} wrapMode="none" selectable={false}>{"─".repeat(200)}</text>
-          </box>
-          <scrollbox
-            ref={(node) => (scrollRef = node ?? undefined)}
-            width="100%"
-            height={Math.min(rows().length + 4, viewportHeight())}
-            scrollY={true}
-            scrollX={false}
-            stickyScroll={false}
-            paddingRight={1}
-          >
-            <For each={rows()}>
-              {(row, index) => (
-                <box id={`choreographer-row-${index()}`} flexDirection="column" width="100%">
-                  <Show when={index() === 0}>{section("ANIMATIONS", FLOW[0])}</Show>
-                  <Show when={index() === 2}>{section("INTERFACE", FLOW[1])}</Show>
-                  <Show when={index() === 4}>{section("AGENT STEPS", "#c6a0f6")}</Show>
-                  {rowLine(row, index())}
-                </box>
-              )}
-            </For>
-          </scrollbox>
-          <box marginTop={1} width="100%" overflow="hidden">
-            <text fg={context.theme.text.faint} wrapMode="none" selectable={false}>{"─".repeat(200)}</text>
-          </box>
-          <text fg={context.theme.text.faint} wrapMode="none" selectable={false}>↑↓ move · ←→ ±5 · enter toggle · r reset</text>
-          <text fg={context.theme.text.faint} wrapMode="none" selectable={false}>click to select · wheel to scroll · − / + adjusts</text>
-          <text fg={online() ? "#a6e3a1" : "#f5a97f"} selectable={false}>
-            {online() ? "plugin connected" : "plugin unreachable: local only"}
-          </text>
-        </box>
-      )
+      context.ui.dialog.show(() => (
+        <SettingsPanel
+          context={context}
+          settings={settings}
+          managed={managed}
+          defaults={defaults}
+          online={online}
+          agentById={agentById}
+          saveSteps={saveSteps}
+          resetSteps={resetSteps}
+          toggleAnimation={toggleAnimation}
+          toggleUi={toggleUi}
+          flushSteps={flushSteps}
+        />
+      ))
     }
 
     context.keymap.layer(() => ({
@@ -661,97 +337,6 @@ export default Plugin.define({
       }
     })
 
-    const header = (sessionID: string, section: Section, title: string, count: () => string | number, small = false) => (
-      <box
-        width="100%"
-        focusable
-        onMouseDown={(event) => {
-          if (event.button !== 0 || event.isDragging) return
-          toggle(sessionID, section)
-        }}
-        onKeyDown={(event) => {
-          if (event.name === "return" || event.name === "space") toggle(sessionID, section)
-        }}
-      >
-        <text fg={context.theme.text.base} selectable={false} attributes={TextAttributes.BOLD}>{`${isOpen(sessionID, section) ? (small ? "▾" : "▼") : (small ? "▸" : "▶")} ${title}${isOpen(sessionID, section) ? "" : ` (${count()})`}`}</text>
-      </box>
-    )
-
-    const row = (agent: AgentInfo, sessionID: string) => {
-      const active = () => {
-        dataVersion()
-        return context.data.session.get(sessionID)?.agent === agent.id
-      }
-      return (
-        <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
-          <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
-            <text wrapMode="none" flexShrink={0} fg={active() ? context.theme.text.base : context.theme.text.faint} selectable={false}>
-              {active() ? "● " : "  "}
-            </text>
-            <text wrapMode="none" fg={agentColor(agent, agent.id)} selectable={false}>
-              {truncate(agent.name, NAME_WIDTH)}
-            </text>
-          </box>
-          <box flexShrink={0}>
-            <text wrapMode="none" fg={active() ? context.theme.text.muted : context.theme.text.faint} selectable={false}>
-              {truncate(activeModel(agent, sessionID), MODEL_WIDTH)}
-            </text>
-          </box>
-        </box>
-      )
-    }
-
-    const runningRow = (session: SessionInfo) => {
-      const agent = () => (agentList() ?? []).find((candidate) => candidate.id === session.agent)
-      const model = () => { const found = agent(); return session.model ? modelName(session.model, modelIndex()) : found?.model ? modelName(found.model, modelIndex()) : "inherit" }
-      return (
-        <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
-          <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
-            <text wrapMode="none" flexShrink={0} fg={context.theme.text.faint} selectable={false}>{"  "}</text>
-            <text wrapMode="none" fg={agentColor(agent(), session.agent)} selectable={false}>
-              {truncate(agent()?.name ?? session.agent ?? "unknown", NAME_WIDTH)}
-            </text>
-          </box>
-          <box flexShrink={0}>
-            <text wrapMode="none" fg={context.theme.text.muted} selectable={false}>
-              {truncate(model(), MODEL_WIDTH)}
-            </text>
-          </box>
-        </box>
-      )
-    }
-
-    const todoRow = (item: TodoItem, index: number) => {
-      const marker =
-        item.status === "completed"
-          ? "✓ "
-          : item.status === "cancelled"
-            ? "✕ "
-            : item.status === "in_progress"
-              ? "● "
-              : "○ "
-      const colour = () =>
-        item.status === "completed"
-          ? "#50fa7b"
-          : item.status === "cancelled"
-            ? "#ff5555"
-            : item.status === "in_progress"
-              ? hueHex(index, todoPhase())
-              : context.theme.text.muted
-      const attributes =
-        item.status === "in_progress" || item.status === "completed" ? TextAttributes.BOLD : undefined
-      return (
-        <box flexDirection="row" width="100%" columnGap={1}>
-          <text wrapMode="none" flexShrink={0} fg={colour()} attributes={attributes} selectable={false}>
-            {marker}
-          </text>
-          <text wrapMode="word" flexShrink={1} minWidth={0} fg={colour()} attributes={attributes} selectable={false}>
-            {item.content}
-          </text>
-        </box>
-      )
-    }
-
     let refreshToasted = false
     let pendingRoster = false
 
@@ -812,41 +397,25 @@ export default Plugin.define({
         if (currentSession() !== sessionID) setCurrentSession(sessionID)
         if (todoAnimFor() !== sessionID) setTodoAnimFor(sessionID)
         return (
-          <box flexDirection="column" gap={0} width="100%">
-            <Show when={settings.ui?.roster ?? true}>
-              {header(sessionID, "agents", "AGENTS & MODELS", () => visibleAgentCount())}
-              <Show when={isOpen(sessionID, "agents")}>
-                <Show when={agentList() !== undefined} fallback={<text fg={context.theme.text.faint} selectable={false}>roster unavailable</text>}>
-                  <box flexDirection="column" width="100%" gap={0}>
-                    <box flexDirection="column" width="100%">
-                      {header(sessionID, "primary", "PRIMARY", () => primary().length, true)}
-                      <Show when={isOpen(sessionID, "primary")}><For each={primary()}>{(agent) => row(agent, sessionID)}</For></Show>
-                    </box>
-                    <box flexDirection="column" width="100%">
-                      {header(sessionID, "workers", "WORKERS", () => workers().length, true)}
-                      <Show when={isOpen(sessionID, "workers")}><For each={workers()}>{(agent) => row(agent, sessionID)}</For></Show>
-                    </box>
-                    <box flexDirection="column" width="100%">
-                      {header(sessionID, "reviewers", "REVIEWERS", () => reviewers().length, true)}
-                      <Show when={isOpen(sessionID, "reviewers")}><For each={reviewers()}>{(agent) => row(agent, sessionID)}</For></Show>
-                    </box>
-                  </box>
-                </Show>
-              </Show>
-            </Show>
-            <Show when={run().length > 0 && (!(settings.ui?.roster ?? true) || isOpen(sessionID, "agents"))}>
-              <box flexDirection="column" width="100%" marginTop={1}>
-                <FlowingLabel text={`RUNNING (${run().length})`} animate={settings.animations.running} />
-                <For each={run()}>{(session) => runningRow(session)}</For>
-              </box>
-            </Show>
-            <Show when={(settings.ui?.todos ?? true) && todoItems(sessionID).length > 0}>
-              <box flexDirection="column" width="100%" marginTop={1}>
-                {header(sessionID, "todos", "TODOS", () => `${todoDone(sessionID)}/${todoItems(sessionID).length}`)}
-                <Show when={isOpen(sessionID, "todos")}><For each={todoItems(sessionID).slice(0, TODO_LIMIT)}>{(item, index) => todoRow(item, index())}</For></Show>
-              </box>
-            </Show>
-          </box>
+          <Sidebar
+            context={context}
+            sessionID={sessionID}
+            settings={settings}
+            isOpen={(section) => isOpen(sessionID, section)}
+            toggle={(section) => toggle(sessionID, section)}
+            agentList={agentList}
+            primary={primary}
+            workers={workers}
+            reviewers={reviewers}
+            visibleAgentCount={visibleAgentCount}
+            run={run}
+            modelIndex={modelIndex}
+            activeModel={(agent) => activeModel(agent, sessionID)}
+            todoItems={() => todoItems(sessionID)}
+            todoDone={() => todoDone(sessionID)}
+            todoPhase={todoPhase}
+            dataVersion={dataVersion}
+          />
         )
       },
     })

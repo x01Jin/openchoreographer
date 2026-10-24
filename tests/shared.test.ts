@@ -1,21 +1,13 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import {
-  AGENT_IDS,
-  LENSES,
-  MAX_RESULT_CHARS,
-  STEP_DEFAULTS,
-  buildDelegationText,
-  buildReviewBrief,
-  clipResultStats,
-  displayWidth,
-  isSidebarStatusEvent,
-  normalizeOptions,
-  shouldRefreshSidebar,
-  validateDiffInput,
-  type Options,
-} from "../shared"
-import { STEPS_MAX, STEPS_MIN } from "../settings"
+import { AGENT_IDS, REVIEWER_IDS, STEP_DEFAULTS } from "../src/shared/agents"
+import { LENSES, buildDelegationText, buildReviewBrief } from "../src/shared/review"
+import { MAX_RESULT_CHARS, clipResultStats } from "../src/shared/results"
+import { displayWidth } from "../src/shared/text"
+import { isSidebarStatusEvent, shouldRefreshSidebar } from "../src/shared/events"
+import { normalizeOptions, type Options } from "../src/shared/options"
+import { validateDiffInput } from "../src/shared/diff"
+import { STEPS_MAX, STEPS_MIN } from "../src/shared/settings"
 
 function options(overrides: Partial<Options> = {}): Options {
   return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, fallback: {}, ...overrides }
@@ -241,6 +233,22 @@ describe("normalizeOptions", () => {
       backend: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
     })
   })
+
+  test("accepts fallback.designer and fallback.writer models while still rejecting an unknown id", () => {
+    const normalized = muted(() =>
+      normalizeOptions({
+        fallback: {
+          designer: "anthropic/claude-sonnet-4",
+          writer: "anthropic/claude-sonnet-4",
+          bogus: "anthropic/claude-sonnet-4",
+        },
+      }),
+    )
+    assert.deepEqual(normalized.fallback, {
+      designer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
+      writer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
+    })
+  })
 })
 
 describe("buildReviewBrief", () => {
@@ -353,6 +361,23 @@ describe("STEP_DEFAULTS", () => {
       assert.ok(Number.isInteger(budget), `non-integer default for ${id}`)
       assert.ok(budget >= STEPS_MIN && budget <= STEPS_MAX, `default for ${id} outside ${STEPS_MIN}..${STEPS_MAX}`)
     }
+  })
+})
+
+describe("specialist agent ids", () => {
+  test("AGENT_IDS contains designer and writer", () => {
+    assert.ok(AGENT_IDS.includes("designer"), "missing designer in AGENT_IDS")
+    assert.ok(AGENT_IDS.includes("writer"), "missing writer in AGENT_IDS")
+  })
+
+  test("designer and writer are not reviewers", () => {
+    assert.ok(!REVIEWER_IDS.includes("designer"), "designer must not be in REVIEWER_IDS")
+    assert.ok(!REVIEWER_IDS.includes("writer"), "writer must not be in REVIEWER_IDS")
+  })
+
+  test("STEP_DEFAULTS sets designer to 40 and writer to 50", () => {
+    assert.equal(STEP_DEFAULTS.designer, 40)
+    assert.equal(STEP_DEFAULTS.writer, 50)
   })
 })
 

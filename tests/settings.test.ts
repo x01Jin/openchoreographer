@@ -1,6 +1,6 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normalizeSnapshot } from "../settings"
+import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normalizeSnapshot } from "../src/shared/settings"
 
 describe("normalizeSettings", () => {
   test("defaults for undefined and null", () => {
