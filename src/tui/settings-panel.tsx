@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js"
 import type { Store } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, InputRenderable } from "@opentui/core"
 import { STEPS_STEP, clampSteps } from "../shared/settings"
 import type { ChoreographerSettings, ModelSettings } from "../shared/settings"
 import { MODEL_GROUPS } from "../shared/agents"
@@ -94,10 +94,14 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [selected, setSelected] = createSignal(0)
   const [picker, setPicker] = createSignal<PickerState | null>(null)
   const [pickerSel, setPickerSel] = createSignal(0)
+  const [query, setQuery] = createSignal("")
   onCleanup(() => {
     props.flushSteps()
   })
   let scrollRef: ScrollBoxRenderable | undefined
+  let searchRef: InputRenderable | undefined
+  let suppressInput = false
+  let savedScrollTop = 0
   const memberIdsFor = (group: string): string[] => {
     const entry = MODEL_GROUPS.find((item) => item.id === group)
     if (!entry) return []
@@ -178,9 +182,24 @@ export function SettingsPanel(props: SettingsPanelProps) {
     return [...seen.entries()].map(([provider, items]) => ({ provider, items }))
   })
   const flatRefs = createMemo((): string[] => groups().flatMap((group) => group.items.map((item) => `${item.providerID}/${item.id}`)))
-  const flatIndex = createMemo((): Map<string, number> => {
+  const filteredGroups = createMemo((): { provider: string; items: ModelInfo[] }[] => {
+    const q = query().trim().toLowerCase()
+    if (q.length === 0) return groups()
+    const out: { provider: string; items: ModelInfo[] }[] = []
+    for (const group of groups()) {
+      const items = group.items.filter((item) => {
+        const ref = `${item.providerID}/${item.id}`
+        const label = (item?.name?.trim() || ref).toLowerCase()
+        return label.includes(q) || item.providerID.toLowerCase().includes(q) || ref.toLowerCase().includes(q)
+      })
+      if (items.length > 0) out.push({ provider: group.provider, items })
+    }
+    return out
+  })
+  const visibleRefs = createMemo((): string[] => filteredGroups().flatMap((group) => group.items.map((item) => `${item.providerID}/${item.id}`)))
+  const visibleIndex = createMemo((): Map<string, number> => {
     const index = new Map<string, number>()
-    flatRefs().forEach((ref, at) => {
+    visibleRefs().forEach((ref, at) => {
       if (!index.has(ref)) index.set(ref, at)
     })
     return index
@@ -203,18 +222,32 @@ export function SettingsPanel(props: SettingsPanelProps) {
     reveal(next)
   }
   const pickerMove = (delta: number) => {
-    const count = flatRefs().length
-    if (count === 0) return
-    const next = Math.min(count - 1, Math.max(0, pickerSel() + delta))
+    const refs = visibleRefs()
+    if (refs.length === 0) return
+    const next = Math.min(refs.length - 1, Math.max(0, pickerSel() + delta))
     setPickerSel(next)
     revealPick(next)
     const state = picker()
     if (state === null) return
-    const refs = flatRefs()
     if (next < 0 || next >= refs.length) return
     const ref = refs[next]
     if (state.staged === ref) return
     setPicker({ ...state, ids: [...state.ids], staged: ref })
+  }
+  const applyQuery = (next: string, stage = true) => {
+    if (suppressInput || next === query()) return
+    setQuery(next)
+    const refs = visibleRefs()
+    const state = picker()
+    let staged = state?.staged ?? null
+    if (stage && state !== null && refs.length > 0 && (staged === null || !refs.includes(staged))) {
+      staged = refs[0]
+      setPicker({ ...state, ids: [...state.ids], staged })
+    }
+    const at = staged === null ? 0 : refs.indexOf(staged)
+    const sel = at < 0 ? 0 : at
+    setPickerSel(sel)
+    revealPick(sel)
   }
   const adjustRow = (id: string, delta: number) => {
     const effective = props.settings.steps[id] ?? props.defaults()[id] ?? props.agentById(id)?.steps ?? null
@@ -230,12 +263,30 @@ export function SettingsPanel(props: SettingsPanelProps) {
     const isBulk = row.kind === "primaryBulk" || row.kind === "fallbackBulk"
     const ids = isBulk ? memberIdsFor(row.group) : [(row as { id: string }).id]
     if (ids.length === 0) return
+    try {
+      savedScrollTop = scrollRef?.scrollTop ?? 0
+    } catch {
+      savedScrollTop = 0
+    }
+    setQuery("")
+    if (searchRef) {
+      try {
+        searchRef.value = ""
+      } catch {
+        // input remounts on open; the fresh value applies
+      }
+    }
+    const startAt = (staged: string | null): number => {
+      if (staged === null) return 0
+      const found = visibleRefs().indexOf(staged)
+      return found < 0 ? 0 : found
+    }
     const group = isBulk ? (row as { group: "workers" | "reviewers" }).group : null
     if (isPrimary) {
       if (!isBulk) {
         const single = ids[0]
         const staged = stagedRef(primaryEffective(single))
-        const at = staged === null ? 0 : flatIndex().get(staged) ?? 0
+        const at = startAt(staged)
         setPickerSel(at)
         setPicker({ mode: "primary", ids, group, origin: index, staged, opened: staged, custom: false })
         revealPick(at)
@@ -243,7 +294,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         const effectives = ids.map((id) => primaryEffective(id))
         const uniform = ids.length > 0 && effectives.every((value) => value === effectives[0])
         const shared = stagedRef(uniform ? effectives[0] : null)
-        const at = shared === null ? 0 : flatIndex().get(shared) ?? 0
+        const at = startAt(shared)
         setPickerSel(at)
         setPicker({ mode: "primary", ids, group, origin: index, staged: shared, opened: shared, custom: !uniform })
         revealPick(at)
@@ -252,7 +303,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       if (!isBulk) {
         const single = ids[0]
         const staged = stagedRef(props.modelSettings().fallback[single]?.[0] ?? null)
-        const at = staged === null ? 0 : flatIndex().get(staged) ?? 0
+        const at = startAt(staged)
         setPickerSel(at)
         setPicker({ mode: "fallback", ids, group, origin: index, staged, opened: staged, custom: false })
         revealPick(at)
@@ -260,7 +311,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         const effectives = ids.map((id) => fallbackEffective(id))
         const uniform = ids.length > 0 && effectives.every((list) => listsEqual(list, effectives[0]))
         const shared = stagedRef(uniform ? effectives[0][0] : null)
-        const at = shared === null ? 0 : flatIndex().get(shared) ?? 0
+        const at = startAt(shared)
         setPickerSel(at)
         setPicker({ mode: "fallback", ids, group, origin: index, staged: shared, opened: shared, custom: !uniform })
         revealPick(at)
@@ -280,15 +331,31 @@ export function SettingsPanel(props: SettingsPanelProps) {
     }
     return Math.min(state.origin, Math.max(0, rows().length - 1))
   }
+  const restoreScroll = () => {
+    const top = savedScrollTop
+    const node = scrollRef
+    setTimeout(() => {
+      if (picker() !== null) return
+      const target = scrollRef ?? node
+      if (!target) return
+      try {
+        target.scrollTop = top
+      } catch {
+        // panel closed or renderer gone; leave the list where it is
+      }
+    }, 16)
+  }
   const exitPicker = (state: PickerState) => {
     setPicker(null)
     const next = focusRowForPicker(state)
     setSelected(next)
     reveal(next)
+    restoreScroll()
   }
   const confirmPicker = () => {
     const state = picker()
     if (state === null) return
+    if (visibleRefs().length === 0) return
     if (state.staged === state.opened) {
       exitPicker(state)
       return
@@ -308,15 +375,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
       })
     }
   }
-  const clearStaged = () => {
-    const state = picker()
-    if (state === null || !props.online() || props.catalog().length === 0) return
-    setPicker({ ...state, ids: [...state.ids], staged: null })
-  }
   const clickEntry = (flat: number) => {
     const state = picker()
     if (state === null || !props.online() || props.catalog().length === 0) return
-    const refs = flatRefs()
+    const refs = visibleRefs()
     if (flat < 0 || flat >= refs.length) return
     const ref = refs[flat]
     setPickerSel(flat)
@@ -334,17 +396,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
     else if (row?.kind === "primaryModel" || row?.kind === "fallbackModel" || row?.kind === "primaryBulk" || row?.kind === "fallbackBulk") openPicker(row, current())
   }
   const pressSpace = () => {
-    if (picker() === null) {
-      pressConfirm()
-      return
-    }
-    confirmPicker()
+    if (picker() !== null) return
+    pressConfirm()
   }
   const pressClear = () => {
-    if (picker() !== null) {
-      clearStaged()
-      return
-    }
     const row = rows()[current()]
     if (row?.kind === "agent") props.resetSteps(row.id)
     else if (row?.kind === "primaryModel") void props.savePrimary([row.id], null)
@@ -359,27 +414,56 @@ export function SettingsPanel(props: SettingsPanelProps) {
       void props.saveFallback(ids, null)
     }
   }
-  props.context.keymap.layer(() => ({
-    mode: "global",
-    priority: 10,
-    commands: [
-      { bind: "up", run: () => (picker() === null ? move(-1) : pickerMove(-1)) },
-      { bind: "down", run: () => (picker() === null ? move(1) : pickerMove(1)) },
-      { bind: "left", run: () => { if (picker() === null) adjust(-STEPS_STEP) } },
-      { bind: "right", run: () => { if (picker() === null) adjust(STEPS_STEP) } },
-      { bind: "return", run: () => pressConfirm() },
-      { bind: "space", run: () => pressSpace() },
-      { bind: "r", run: () => pressClear() },
-      {
-        bind: "escape",
-        run: () => {
-          const state = picker()
-          if (state === null) props.context.ui.dialog.clear()
-          else exitPicker(state)
-        },
-      },
-    ],
-  }))
+  const pressEscape = () => {
+    const state = picker()
+    if (state === null) {
+      props.context.ui.dialog.clear()
+      return
+    }
+    if (query().length > 0) {
+      applyQuery("", false)
+      if (searchRef) {
+        suppressInput = true
+        try {
+          searchRef.value = ""
+        } catch {
+          // input stays mounted; the query reset drives the list
+        } finally {
+          suppressInput = false
+        }
+      }
+      return
+    }
+    exitPicker(state)
+  }
+  props.context.keymap.layer(() => {
+    if (picker() !== null) {
+      return {
+        mode: "global",
+        priority: 10,
+        commands: [
+          { bind: "up", run: () => pickerMove(-1) },
+          { bind: "down", run: () => pickerMove(1) },
+          { bind: "return", run: () => pressConfirm() },
+          { bind: "escape", run: () => pressEscape() },
+        ],
+      }
+    }
+    return {
+      mode: "global",
+      priority: 10,
+      commands: [
+        { bind: "up", run: () => move(-1) },
+        { bind: "down", run: () => move(1) },
+        { bind: "left", run: () => adjust(-STEPS_STEP) },
+        { bind: "right", run: () => adjust(STEPS_STEP) },
+        { bind: "return", run: () => pressConfirm() },
+        { bind: "space", run: () => pressSpace() },
+        { bind: "r", run: () => pressClear() },
+        { bind: "escape", run: () => pressEscape() },
+      ],
+    }
+  })
   const pickerTitle = () => {
     const state = picker()
     if (state === null) return "Choreographer settings"
@@ -593,10 +677,23 @@ export function SettingsPanel(props: SettingsPanelProps) {
       <box width="100%" overflow="hidden">
         <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>{"─".repeat(200)}</text>
       </box>
+      <Show when={picker() !== null}>
+        <box width="100%" marginTop={1}>
+          <input
+            ref={(node) => (searchRef = node ?? undefined)}
+            width="100%"
+            value=""
+            placeholder="type to filter models…"
+            focused={picker() !== null}
+            onInput={(value: string) => applyQuery(value)}
+          />
+        </box>
+      </Show>
       <scrollbox
         ref={(node) => (scrollRef = node ?? undefined)}
         width="100%"
         height={Math.min(picker() === null ? rows().length + 6 : groups().length + flatRefs().length + 3, viewportHeight())}
+        marginTop={picker() === null ? 0 : 1}
         scrollY={true}
         scrollX={false}
         stickyScroll={false}
@@ -611,7 +708,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   <text fg={props.context.theme.text.faint} selectable={false}>no models available</text>
                 </box>
               </Show>
-              <For each={groups()}>
+              <Show when={flatRefs().length > 0 && visibleRefs().length === 0}>
+                <box marginTop={1}>
+                  <text fg={props.context.theme.text.faint} selectable={false}>{`no matches for "${truncate(query(), 28)}"`}</text>
+                </box>
+              </Show>
+              <For each={filteredGroups()}>
                 {(group) => (
                   <box flexDirection="column" width="100%">
                     <box marginTop={1}>
@@ -620,7 +722,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     <For each={group.items}>
                       {(item) => {
                         const ref = `${item.providerID}/${item.id}`
-                        const flat = flatIndex().get(ref) ?? -1
+                        const flat = visibleIndex().get(ref) ?? -1
                         const entryLabel = item?.name?.trim() || ref
                         const focused = () => flat === pickerSel()
                         const isStaged = () => picker()?.staged === ref
@@ -677,8 +779,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
         when={picker() === null}
         fallback={(
           <box flexDirection="column" width="100%">
-            <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>↑↓ move · space select · enter confirm · r clear · esc back</text>
-            <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>click selects · wheel scrolls</text>
+            <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>↑↓ move · enter confirm · esc clear / back</text>
+            <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>click confirms · wheel scrolls · type filters</text>
             <Show when={(picker()?.ids.length ?? 0) > 1}>
               <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>{`enter applies to all ${picker()?.ids.length} in group`}</text>
             </Show>

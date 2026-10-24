@@ -4,7 +4,7 @@
 
 The plugin has two halves that talk only through RPC (`src/shared/rpc.ts`). `index.ts` is the server composition root: it registers tools, hooks, and commands. `tui.tsx` is the TUI composition root: it renders the sidebar and the settings dialog. A settings field must be added on both sides and in the RPC schemas or it is silently dropped.
 
-There are two plugin commands and one settings shortcut. `/orchestrate` switches to the orchestrator and starts a delegated task. `/review-panel` switches to the orchestrator and runs a strict review of the current changes. `/choreographer` opens the settings dialog (registered as a TUI keymap slash, not a plugin command).
+There is one plugin command plus a settings shortcut. `/review-panel` switches to the orchestrator and runs a strict review of the current changes. `/choreographer` opens the settings dialog (registered as a TUI keymap slash, not a plugin command).
 
 The roster is one primary agent and thirteen subagents. The orchestrator (`mode: primary`) plans, delegates, and verifies. Eight worker-group agents do the work: `explore` (read-only recon), five domain workers (`backend`, `frontend`, `database`, `devops`, `tester`), and two specialists (`designer`, read-only; `writer`, docs only). Five reviewers (`reviewer`, `reviewer-security`, `reviewer-plan`, `reviewer-execution`, `reviewer-scope`) are read-only. See [roster](roster.md) for the full table.
 

@@ -25,9 +25,8 @@ opencode run --agent orchestrator --auto "Add a retry with backoff to the upload
 
 If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the orchestrator by default.
 
-- `/orchestrate` switches an existing session to the orchestrator and starts a delegated task.
-- `/review-panel` runs a strict review of the current changes.
 - `/choreographer` opens the settings dialog.
+- `/review-panel` runs a strict review of the current changes. The orchestrator already runs reviewers before delegating work and after its workers edit, so use this for changes that arrived from elsewhere, such as a pull, a teammate's branch, or manual edits, when you want the same review panel without starting an orchestration run.
 
 ## Documentation
 
