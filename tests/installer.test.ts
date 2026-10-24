@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AGENT_IDS } from "../src/shared/agents";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INSTALLER = path.join(REPO_ROOT, "bin", "install.mjs");
@@ -170,7 +171,7 @@ describe("installer step-budget preservation", () => {
     assert.equal(fs.readFileSync(nestedAgents, "utf8"), tampered, "tampered content survives without --force");
   });
 
-  test("local install ships all eleven agent files to both destinations", () => {
+  test("local install ships every AGENT_IDS agent file to both destinations", () => {
     const configDir = makeConfigDir();
     const result = runInstaller(["--local", "--force", "--no-deps"], configDir);
     assert.equal(result.status, 0, result.stderr);
@@ -179,7 +180,7 @@ describe("installer step-budget preservation", () => {
       path.join(configDir, "plugins", "openchoreographer", "agents"),
     ]) {
       const files = fs.readdirSync(base).filter((f) => f.endsWith(".md")).sort();
-      assert.equal(files.length, 11, `expected 11 agent files in ${base}`);
+      assert.equal(files.length, AGENT_IDS.length, `expected ${AGENT_IDS.length} agent files in ${base}`);
       assert.ok(files.includes("designer.md"), "designer.md is installed");
       assert.ok(files.includes("writer.md"), "writer.md is installed");
     }

@@ -1,5 +1,5 @@
 import type { Plugin } from "@opencode/plugin"
-import { isReviewer, isWorker } from "../shared/agents"
+import { isReviewer, isWorker, REVIEWER_PLAN_ID } from "../shared/agents"
 import type { Options } from "../shared/options"
 import { buildDelegationText } from "../shared/review"
 
@@ -26,7 +26,9 @@ export function contextHook(ctx: Plugin.Context, options: Options) {
       delete event.tools.patch
       delete event.tools.shell
       delete event.tools.subagent
-      delete event.tools.question
+      if (event.agent !== REVIEWER_PLAN_ID) {
+        delete event.tools.question
+      }
       return
     }
     if (isWorker(event.agent)) {

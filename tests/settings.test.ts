@@ -134,7 +134,7 @@ describe("normalizeSnapshot", () => {
         managed: ["backend"],
         models: { primary: {}, fallback: {} },
         configured: {},
-        subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"],
+        subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
       },
     )
   })
@@ -209,7 +209,7 @@ describe("normalizeSnapshot", () => {
       managed: ["backend"],
       models: { primary: {}, fallback: {} },
       configured: {},
-      subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"],
+      subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
     })
   })
 
@@ -222,7 +222,7 @@ describe("normalizeSnapshot", () => {
     })
     assert.deepEqual(snap?.models, { primary: {}, fallback: {} })
     assert.deepEqual(snap?.configured, {})
-    assert.deepEqual(snap?.subagents, ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"])
+    assert.deepEqual(snap?.subagents, ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"])
   })
 
   test("keeps stored model overrides on the snapshot", () => {
@@ -240,8 +240,8 @@ describe("normalizeSnapshot", () => {
     assert.deepEqual(snap?.subagents, ["backend"])
   })
 
-  test("drops a stored orchestrator model while keeping the 10 subagents", () => {
-    const subagents = ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"]
+  test("drops a stored orchestrator model while keeping the 13 subagents", () => {
+    const subagents = ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"]
     const primary: Record<string, string> = { orchestrator: "a/b" }
     const fallback: Record<string, string[]> = { orchestrator: ["a/b"] }
     const configured: Record<string, string> = { orchestrator: "a/b" }
@@ -261,9 +261,9 @@ describe("normalizeSnapshot", () => {
     assert.equal(snap?.models.primary.orchestrator, undefined)
     assert.equal(snap?.models.fallback.orchestrator, undefined)
     assert.equal(snap?.configured.orchestrator, undefined)
-    assert.equal(Object.keys(snap?.models.primary ?? {}).length, 10)
-    assert.equal(Object.keys(snap?.models.fallback ?? {}).length, 10)
-    assert.equal(Object.keys(snap?.configured ?? {}).length, 10)
+    assert.equal(Object.keys(snap?.models.primary ?? {}).length, 13)
+    assert.equal(Object.keys(snap?.models.fallback ?? {}).length, 13)
+    assert.equal(Object.keys(snap?.configured ?? {}).length, 13)
     for (const id of subagents) {
       assert.equal(snap?.models.primary[id], "a/b")
       assert.deepEqual(snap?.models.fallback[id], ["a/b"])
@@ -329,9 +329,9 @@ describe("normalizeSettings models", () => {
 
   test("caps agents at 32 and fallbacks at 8", () => {
     const primary: Record<string, string> = {}
-    for (const id of ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"]) primary[id] = "a/b"
+    for (const id of ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"]) primary[id] = "a/b"
     for (let i = 0; i < 30; i += 1) primary[`id${i}`] = "a/b"
-    assert.equal(Object.keys(normalizeSettings({ models: { primary } }).models.primary).length, 10)
+    assert.equal(Object.keys(normalizeSettings({ models: { primary } }).models.primary).length, 13)
     const refs = Array.from({ length: 12 }, (_, i) => `p/m${i}`)
     assert.equal(normalizeSettings({ models: { fallback: { backend: refs } } }).models.fallback.backend.length, 8)
   })

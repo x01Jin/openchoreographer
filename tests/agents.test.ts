@@ -26,9 +26,14 @@ function parseFrontmatter(lines: string[]): { data: Record<string, string>; clos
 }
 
 describe("agents", () => {
-  test("all eleven agent files meet the specialist contract", () => {
+  test("all agent files for AGENT_IDS meet the specialist contract", () => {
     const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith(".md")).sort();
-    assert.equal(files.length, 11, `expected 11 agent files, found ${files.length}`);
+    const expected = AGENT_IDS.map((id) => `${id}.md`).sort();
+    assert.equal(files.length, AGENT_IDS.length, `expected ${AGENT_IDS.length} agent files, found ${files.length}`);
+    for (const name of expected) {
+      assert.ok(files.includes(name), `${name} exists`);
+    }
+    assert.deepStrictEqual(files, expected, "agent files are exactly AGENT_IDS, with no extras");
     assert.ok(files.includes("designer.md"), "designer.md exists");
     assert.ok(files.includes("writer.md"), "writer.md exists");
     for (const file of files) {

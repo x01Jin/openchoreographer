@@ -2,7 +2,8 @@ export const ORCHESTRATOR_ID = "orchestrator"
 export const EXPLORE_ID = "explore"
 export const WORKER_IDS: readonly string[] = ["backend", "frontend", "database", "devops", "tester"]
 export const SPECIALIST_IDS: readonly string[] = ["designer", "writer"]
-export const REVIEWER_IDS: readonly string[] = ["reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"]
+export const REVIEWER_PLAN_ID = "reviewer-plan"
+export const REVIEWER_IDS: readonly string[] = ["reviewer", "reviewer-security", REVIEWER_PLAN_ID, "reviewer-execution", "reviewer-scope"]
 export const AGENT_IDS: readonly string[] = [ORCHESTRATOR_ID, EXPLORE_ID, ...WORKER_IDS, ...SPECIALIST_IDS, ...REVIEWER_IDS]
 export const SUBAGENT_IDS: readonly string[] = AGENT_IDS.filter((id) => id !== ORCHESTRATOR_ID)
 

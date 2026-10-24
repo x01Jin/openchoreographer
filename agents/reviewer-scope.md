@@ -2,7 +2,7 @@
 description: Read-only review of whether the work should exist
 mode: subagent
 color: "#89b4fa"
-steps: 800
+steps: 40
 permissions:
   - action: edit
     resource: "*"

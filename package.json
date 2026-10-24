@@ -22,6 +22,7 @@
     "index.ts",
     "tui.tsx",
     "agents",
+    "docs",
     "bin",
     "src",
     "README.md",
