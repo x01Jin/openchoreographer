@@ -1,8 +1,8 @@
 import { Plugin } from "@opencode/plugin"
-import { AGENT_IDS, STEP_DEFAULTS } from "./src/shared/agents"
+import { AGENT_IDS, STEP_DEFAULTS, SUBAGENT_IDS } from "./src/shared/agents"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
-import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type SettingsSnapshot } from "./src/shared/settings"
+import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
 import { agentDirs, agentFilePath, readAgentSteps, writeAgentSteps } from "./src/server/agent-files"
 import { warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
@@ -26,8 +26,14 @@ export default Plugin.define({
     active = []
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
     const options = normalizeOptions(ctx.options)
+    // 1.2.0 accepted a `fallback` object here. It is gone, but an upgrade leaves the key in
+    // opencode.jsonc where it would otherwise vanish without explanation.
+    if (typeof ctx.options === "object" && ctx.options !== null && Object.prototype.hasOwnProperty.call(ctx.options, "fallback")) {
+      console.warn('openchoreographer: the "fallback" plugin option is ignored; configure fallback models in /choreographer')
+    }
     const registrations: Registration[] = []
     const managedIds = [...new Set([options.agent, ...AGENT_IDS])].filter((id) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id))
+    const subagents = SUBAGENT_IDS
     let reloadTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     const scheduleReload = () => {
@@ -69,13 +75,46 @@ export default Plugin.define({
         }
       }
       const settings = { current: normalized }
+      const getModels = (): ModelSettings => settings.current.models
       const dirs = agentDirs(ctx.location)
       let fileSteps: Record<string, number> = {}
       for (const id of managedIds) {
         const value = readAgentSteps(dirs, id)
         if (value !== null) fileSteps[id] = value
       }
-      const snapshot = (): SettingsSnapshot => ({ animations: settings.current.animations, ui: settings.current.ui, steps: { ...fileSteps }, defaults: Object.fromEntries(managedIds.map((id) => [id, STEP_DEFAULTS[id] ?? null])), managed: managedIds })
+      const loadConfigured = async (): Promise<Record<string, string | null>> => {
+        const configured: Record<string, string | null> = {}
+        for (const id of subagents) configured[id] = null
+        try {
+          const listed = await ctx.agent.list({ location: ctx.location })
+          for (const id of subagents) {
+            const found = listed.data.find((a) => a.id === id)
+            configured[id] =
+              found?.model !== undefined
+                ? found.model.providerID + "/" + found.model.id + (found.model.variant ? "#" + found.model.variant : "")
+                : null
+          }
+        } catch {
+          // An unavailable agent list must not break settings; nulls already mark every subagent.
+        }
+        return configured
+      }
+      const snapshot = async (): Promise<SettingsSnapshot> => {
+        const models: ModelSettings = {
+          primary: { ...settings.current.models.primary },
+          fallback: Object.fromEntries(Object.entries(settings.current.models.fallback).map(([id, refs]) => [id, [...refs]])),
+        }
+        return {
+          animations: settings.current.animations,
+          ui: settings.current.ui,
+          steps: { ...fileSteps },
+          defaults: Object.fromEntries(managedIds.map((id) => [id, STEP_DEFAULTS[id] ?? null])),
+          managed: managedIds,
+          models,
+          configured: await loadConfigured(),
+          subagents: [...subagents],
+        }
+      }
       let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
       const rpc = await ctx.rpc.register(ChoreographerRpc, {
         getSettings: async () => {
@@ -110,20 +149,20 @@ export default Plugin.define({
             scheduleReload()
           }
           await ctx.storage.set(SETTINGS_KEY, settings.current)
-          const snap = snapshot()
+          const snap = await snapshot()
           if (emitUpdated) await emitUpdated(snap)
           return snap
         },
       })
       registrations.push(rpc)
       emitUpdated = (snap) => rpc.events.emit("updated", snap)
-      registrations.push(await retryHook(ctx, options))
+      registrations.push(await retryHook(ctx, getModels))
 
-      registrations.push(await subagentBeforeHook(ctx, options))
+      registrations.push(await subagentBeforeHook(ctx, getModels))
 
       registrations.push(await subagentAfterHook(ctx))
 
-      registrations.push(await subagentTransform(ctx, options))
+      registrations.push(await subagentTransform(ctx, getModels))
 
       const listed = await ctx.agent.list({ location: ctx.location }).catch(() => undefined)
       if (listed) {
@@ -132,24 +171,18 @@ export default Plugin.define({
         if (missing.length > 0) {
           console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
         }
-        for (const id of Object.keys(options.fallback)) {
-          const found = listed.data.find((a) => a.id === id)
-          if (found?.model === undefined) {
-            console.warn(`openchoreographer: fallback configured for "${id}" but that agent has no explicit model; it inherits the parent and fallback is skipped`)
-          }
-        }
       } else {
         console.warn("openchoreographer: agent list unavailable, skipping setup validation")
       }
 
       // Context-window limits are advisory; a catalog read must never break setup.
-      if (Object.keys(options.fallback).length > 0) void warnNarrowFallbacks(ctx, options).catch(() => undefined)
+      if (Object.keys(settings.current.models.fallback).length > 0) void warnNarrowFallbacks(ctx, getModels()).catch(() => undefined)
 
       registrations.push(await diffTool(ctx))
 
       registrations.push(await todoTools(ctx))
 
-      registrations.push(await fallbackStatusTool(ctx, options, breaker))
+      registrations.push(await fallbackStatusTool(ctx, breaker, getModels))
 
       registrations.push(await commands(ctx, options))
 

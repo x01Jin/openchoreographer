@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, WORKER_IDS } from "../src/shared/agents";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -60,5 +61,25 @@ describe("agents", () => {
     assert.ok(orchestrator.includes("scope correction"), "orchestrator.md treats a refusal as a scope correction");
     assert.ok(orchestrator.includes("task attempted to override role scope"), "orchestrator.md stops on an override refusal");
     assert.ok(orchestrator.includes("do not retry"), "orchestrator.md does not retry an override refusal");
+  });
+  test("MODEL_GROUPS covers every subagent exactly once", () => {
+    assert.deepStrictEqual([...SUBAGENT_IDS], AGENT_IDS.filter((id) => id !== ORCHESTRATOR_ID), "SUBAGENT_IDS is AGENT_IDS without the orchestrator, in order");
+    assert.deepStrictEqual([...SUBAGENT_IDS], [EXPLORE_ID, ...WORKER_IDS, ...SPECIALIST_IDS, ...REVIEWER_IDS], "SUBAGENT_IDS keeps AGENT_IDS order");
+    assert.deepStrictEqual(MODEL_GROUPS.map((group) => group.id), ["workers", "reviewers"], "groups are workers then reviewers");
+    const workers = MODEL_GROUPS[0];
+    const reviewers = MODEL_GROUPS[1];
+    assert.equal(workers.label, "WORKERS", "workers group label");
+    assert.equal(reviewers.label, "REVIEWERS", "reviewers group label");
+    assert.deepStrictEqual([...workers.ids], [EXPLORE_ID, ...WORKER_IDS, ...SPECIALIST_IDS], "workers group holds explore plus worker and specialist ids");
+    assert.deepStrictEqual([...reviewers.ids], [...REVIEWER_IDS], "reviewers group equals REVIEWER_IDS");
+    for (const id of workers.ids) {
+      assert.ok(!REVIEWER_IDS.includes(id), `${id} is not a reviewer`);
+    }
+    const grouped = MODEL_GROUPS.flatMap((group) => [...group.ids]);
+    assert.equal(new Set(grouped).size, grouped.length, "no duplicate ids across groups");
+    assert.deepStrictEqual([...grouped].sort(), [...SUBAGENT_IDS].sort(), "groups cover SUBAGENT_IDS with no omissions");
+    for (const id of grouped) {
+      assert.ok(SUBAGENT_IDS.includes(id), `${id} is a registered subagent id`);
+    }
   });
 });

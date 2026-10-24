@@ -10,7 +10,7 @@ import { validateDiffInput } from "../src/shared/diff"
 import { STEPS_MAX, STEPS_MIN } from "../src/shared/settings"
 
 function options(overrides: Partial<Options> = {}): Options {
-  return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, fallback: {}, ...overrides }
+  return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, ...overrides }
 }
 
 // normalizeOptions reports bad input on console.warn; these tests assert returned values only.
@@ -185,8 +185,8 @@ describe("validateDiffInput", () => {
 })
 
 describe("normalizeOptions", () => {
-  test("defaults to orchestrator / 4 / 2 / {}", () => {
-    const expected = { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, fallback: {} }
+  test("defaults to orchestrator / 4 / 2", () => {
+    const expected = { agent: "orchestrator", maxParallel: 4, maxReviewers: 2 }
     assert.deepEqual(normalizeOptions(undefined), expected)
     assert.deepEqual(normalizeOptions({}), expected)
   })
@@ -224,29 +224,6 @@ describe("normalizeOptions", () => {
     assert.equal(normalizeOptions({ agent: "   " }).agent, "orchestrator")
     muted(() => {
       assert.equal(normalizeOptions({ agent: 12 }).agent, "orchestrator")
-    })
-  })
-
-  test("parses configured fallback models", () => {
-    const normalized = muted(() => normalizeOptions({ fallback: { backend: "anthropic/claude-sonnet-4" } }))
-    assert.deepEqual(normalized.fallback, {
-      backend: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
-    })
-  })
-
-  test("accepts fallback.designer and fallback.writer models while still rejecting an unknown id", () => {
-    const normalized = muted(() =>
-      normalizeOptions({
-        fallback: {
-          designer: "anthropic/claude-sonnet-4",
-          writer: "anthropic/claude-sonnet-4",
-          bogus: "anthropic/claude-sonnet-4",
-        },
-      }),
-    )
-    assert.deepEqual(normalized.fallback, {
-      designer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
-      writer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
     })
   })
 })

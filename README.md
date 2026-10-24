@@ -91,37 +91,25 @@ Judgment agents are worth a stronger model: `orchestrator`, `reviewer`, `reviewe
 }
 ```
 
-Use `provider/model`, optionally followed by `#variant`. Agents without an explicit model inherit the parent session model. The plugin does not map models.
+Use `provider/model`, optionally followed by `#variant`. Agents without an explicit model inherit the parent session model. The plugin does not change a configured agent model itself, but the `/choreographer` dialog can override a subagent's primary and set its fallbacks.
 
 ## Model fallback
 
 A subagent can be switched to a fallback model when its primary model is rate limited or out of quota. The orchestrator is excluded: it always runs the model you pick for the session.
 
-Primary models stay where they already are, `agents.<id>.model` in `opencode.jsonc`. The plugin does not duplicate them. `fallback` is a plugin option keyed by agent id, and each value is an ordered list of alternates:
-
-```jsonc
-"options": {
-  "maxParallel": 4,
-  "fallback": {
-    "backend": ["opencode-go/muse-spark-1.3-contributor"],
-    "reviewer": ["opencode-go/muse-spark-1.3-contributor", "opencode-go/another-model"]
-  }
-}
-```
-
-Valid keys are the managed subagents: `explore`, `backend`, `frontend`, `database`, `devops`, `tester`, `designer`, `writer`, `reviewer`, `reviewer-security`. Any other key is dropped with a warning. A model string is `provider/model`, optionally `provider/model#variant`; an invalid entry is dropped with a warning, and an empty list disables fallback for that agent.
+`agents.<id>.model` in `opencode.jsonc` stays the default primary model for a subagent, and `/choreographer` can override it per agent or per group. Overrides live in the plugin's own settings storage, not in `opencode.jsonc` or the agent `.md` files. Fallbacks are set the same way, in the dialog only: per agent, or for a whole group with the `all workers` and `all reviewers` rows. There is no config entry for them. A model string is `provider/model`, optionally `provider/model#variant`, and an agent with no fallback override in the dialog has no fallbacks. A `fallback` key left in the plugin's `options` block is ignored, and setup logs one warning about it.
 
 A 429, a 402, or an error whose message names a rate limit, quota, usage limit, or free-tier limit marks that model unavailable. Availability is tracked per `provider/model`, not per agent, so one exhausted model affects every agent that uses it.
 
-Before a subagent is spawned the plugin picks the first configured model that is not marked unavailable and passes it to the subagent call. When no alternate is available it still tries the last one rather than failing. If a spawn fails on an exhausted model, the plugin retries that one spawn once with the fallback model and no more; a failure on a model that is not exhausted propagates untouched. The host's own retry is switched off for an agent that has fallbacks.
+Before a subagent is spawned the plugin picks the first model that is not marked unavailable and passes it to the subagent call. The primary is the dialog override, else `agents.<id>.model`, else the model the agent inherits from the parent session; fallbacks come only from the dialog. The override is passed to the subagent call when the orchestrator spawns it, and the fallback chain still applies when that model is rate limited or out of quota. A model supplied explicitly by the caller is left alone unless it is already marked unavailable. When no alternate is available it still tries the last one rather than failing. If a spawn fails on an exhausted model, the plugin retries that one spawn once with the fallback model and no more; a failure on a model that is not exhausted propagates untouched. The host's own retry is switched off for an agent that has fallbacks.
 
 A spawn that fails after the working tree changed is not retried on a fallback model, because a retry would start a fresh child session against the files the failed one already wrote; the error names up to five changed files. At setup, when a fallback model's context window is smaller than its primary's, the plugin logs a warning naming both limits, and those limits are advisory: they never block setup.
 
 A mark expires after 5 minutes, and the window doubles on each new failure up to 60 minutes. A successful spawn on a model clears its state immediately, so the primary is used again as soon as it works.
 
-The read-only `fallback_status` tool reports each managed agent's primary model, its configured fallbacks, and any model currently in backoff, so you can tell which model a worker will use before spawning it.
+The read-only `fallback_status` tool reports each managed agent's primary model, its dialog fallbacks, and any model currently in backoff, so you can tell which model a worker will use before spawning it.
 
-Agents without a `fallback` entry are never touched, and the orchestrator is never affected.
+An agent with no fallback override in the dialog is never switched to another model, and the orchestrator is never affected.
 
 ## Configuration
 
@@ -143,7 +131,6 @@ Agents without a `fallback` entry are never touched, and the orchestrator is nev
 - `agent`: ID of the primary orchestrator agent.
 - `maxParallel`: background subagents the orchestrator is told to run at once, 1-8, default 4.
 - `maxReviewers`: reviewer calls per panel including correctness, 1-4, default 2. The cap covers `reviewer` lens calls only; `reviewer-security` is additional when its trigger fires. `1` means the correctness lens only.
-- `fallback`: per-agent ordered fallback models for subagents, default empty. See [Model fallback](#model-fallback).
 
 ## Settings
 
@@ -158,6 +145,8 @@ Agents without a `fallback` entry are never touched, and the orchestrator is nev
 Arrow keys move, left and right change a step budget by 5, enter toggles an animation or a switch, `r` resets a step budget to its default, and escape closes. Click a row to select it, click `−` or `+` to change a budget, and use the wheel to scroll.
 
 The dialog writes `steps:` into the agent definition file (`~/.config/opencode/agents/<id>.md`, or `.opencode/agents` when the project has one), and the installer keeps the value across upgrades unless `--reset-steps` is passed. The host reloads the agent when that file changes. `STEP_DEFAULTS` in `src/shared/agents.ts` is the reset target, and no step value is stored in the plugin's own settings. A budget set in the dialog is written to the file, the default in `STEP_DEFAULTS` is what `r` writes back, and the panel and the file therefore always show the same number. Values are clamped to 1-2000.
+
+The dialog also has `PRIMARY MODELS` and `FALLBACK MODELS` sections for the ten subagents. Enter or click opens an in-dialog model picker grouped by provider; the fallback picker works the same way, one model per agent. `r` clears the row's override, after which the primary row shows the agent's configured model or `inherit`, and the fallback row shows `none`. Escape backs out of the picker, then closes the dialog. Unlike the step rows, these do not write any file. Each section groups its rows under `WORKERS` and `REVIEWERS` subheaders with one bulk row per group: `all workers` for the eight workers and `all reviewers` for the two reviewers. Enter or click on a bulk row opens the same picker and applies the choice to every agent in the group at once, replacing any per-agent overrides; a bulk row shows the shared model name when its members agree and `custom` when they differ, and `r` on it clears every member's override. Per-agent rows still work individually.
 
 Turning an animation off stops its timer, including the 60ms repaint loop the todo animation drove.
 

@@ -1,10 +1,11 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
 import { batch, createEffect, createMemo, createSignal } from "solid-js"
-import { isReviewer } from "./src/shared/agents"
+import { isReviewer, SUBAGENT_IDS } from "./src/shared/agents"
+import { parseModel } from "./src/shared/fallback"
 import { isSidebarStatusEvent, shouldRefreshSidebar } from "./src/shared/events"
 import { defaultSettings, normalizeSnapshot } from "./src/shared/settings"
-import type { ChoreographerSettings, Ui } from "./src/shared/settings"
+import type { ChoreographerSettings, ModelSettings, Ui } from "./src/shared/settings"
 import { ChoreographerRpc } from "./src/shared/rpc"
 import { modelName, normalizeTodoStatus, sanitize } from "./src/tui/format"
 import type { Section, TodoItem } from "./src/tui/format"
@@ -46,6 +47,8 @@ export default Plugin.define({
     }
     const [managed, setManaged] = createSignal<string[]>([])
     const [defaults, setDefaults] = createSignal<Record<string, number | null>>({})
+    const [configured, setConfigured] = createSignal<Record<string, string | null>>({})
+    const [subagents, setSubagents] = createSignal<string[]>([])
     const [online, setOnline] = createSignal(true)
     let inflight = 0
     let mutation = 0
@@ -53,6 +56,25 @@ export default Plugin.define({
 
     const rpc = context.client.rpc(ChoreographerRpc)
     const callOptions = { location: { directory: location.directory } }
+
+    const stringRecordSame = (a: Record<string, string | null>, b: Record<string, string | null>): boolean => {
+      const keys = Object.keys(b)
+      return Object.keys(a).length === keys.length && keys.every((key) => a[key] === b[key])
+    }
+    const stringListRecordSame = (a: Record<string, string[]>, b: Record<string, string[]>): boolean => {
+      const keys = Object.keys(b)
+      if (Object.keys(a).length !== keys.length) return false
+      return keys.every((key) => {
+        const left = a[key] ?? []
+        const right = b[key] ?? []
+        return left.length === right.length && right.every((value, index) => left[index] === value)
+      })
+    }
+    const copyFallback = (value: Record<string, string[]>): Record<string, string[]> => {
+      const copy: Record<string, string[]> = {}
+      for (const [key, entry] of Object.entries(value)) copy[key] = [...entry]
+      return copy
+    }
 
     const applySnapshot = (value: unknown) => {
       const snap = normalizeSnapshot(value)
@@ -80,15 +102,27 @@ export default Plugin.define({
       const uiSame =
         (settings.ui?.todos ?? true) === snap.ui.todos &&
         (settings.ui?.roster ?? true) === snap.ui.roster
-      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame) return
+      const currentModels = settings.models ?? { primary: {}, fallback: {} }
+      const modelsSame =
+        stringRecordSame(currentModels.primary ?? {}, snap.models.primary) &&
+        stringListRecordSame(currentModels.fallback ?? {}, snap.models.fallback)
+      const configuredSame = stringRecordSame(configured(), snap.configured)
+      const currentSubagents = subagents()
+      const subagentsSame =
+        currentSubagents.length === snap.subagents.length &&
+        snap.subagents.every((id, index) => currentSubagents[index] === id)
+      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame) return
       batch(() => {
         void setSettings((draft) => {
           draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
           draft.ui = { todos: snap.ui.todos, roster: snap.ui.roster }
           draft.steps = { ...snap.steps }
+          draft.models = { primary: { ...snap.models.primary }, fallback: copyFallback(snap.models.fallback) }
         })
         setManaged([...snap.managed])
         setDefaults({ ...snap.defaults })
+        setConfigured({ ...snap.configured })
+        setSubagents([...snap.subagents])
         bump()
       })
     }
@@ -197,6 +231,76 @@ export default Plugin.define({
       queueSteps(id, null)
     }
 
+    const modelSettings = (): ModelSettings => settings.models ?? { primary: {}, fallback: {} }
+
+    const savePrimary = (ids: string[], ref: string | null): Promise<boolean> => {
+      const before = { primary: { ...modelSettings().primary }, fallback: copyFallback(modelSettings().fallback) }
+      mutation += 1
+      const at = mutation
+      void setSettings((draft) => {
+        const current = draft.models ?? { primary: {}, fallback: {} }
+        const primary = { ...(current.primary ?? {}) }
+        for (const id of ids) {
+          if (ref === null) delete primary[id]
+          else primary[id] = ref
+        }
+        draft.models = { primary, fallback: { ...(current.fallback ?? {}) } }
+      })
+      bump()
+      inflight += 1
+      const payload: Record<string, string | null> = {}
+      for (const id of ids) payload[id] = ref
+      return rpc.setSettings({ models: { primary: payload } }, callOptions).then((snap) => {
+        if (at === mutation) applySnapshot(snap)
+        return true
+      }).catch(() => {
+        setOnline(false)
+        context.ui.toast.show({ message: "Could not save model settings: server plugin unreachable", variant: "warning" })
+        if (at === mutation) {
+          void setSettings((draft) => {
+            draft.models = { primary: { ...before.primary }, fallback: copyFallback(before.fallback) }
+          })
+        } else {
+          void syncSettings(false)
+        }
+        return false
+      }).finally(settle)
+    }
+
+    const saveFallback = (ids: string[], refs: string[] | null): Promise<boolean> => {
+      const before = { primary: { ...modelSettings().primary }, fallback: copyFallback(modelSettings().fallback) }
+      mutation += 1
+      const at = mutation
+      void setSettings((draft) => {
+        const current = draft.models ?? { primary: {}, fallback: {} }
+        const fallback = copyFallback(current.fallback ?? {})
+        for (const id of ids) {
+          if (refs === null) delete fallback[id]
+          else fallback[id] = [...refs]
+        }
+        draft.models = { primary: { ...(current.primary ?? {}) }, fallback }
+      })
+      bump()
+      inflight += 1
+      const payload: Record<string, string[] | null> = {}
+      for (const id of ids) payload[id] = refs === null ? null : [...refs]
+      return rpc.setSettings({ models: { fallback: payload } }, callOptions).then((snap) => {
+        if (at === mutation) applySnapshot(snap)
+        return true
+      }).catch(() => {
+        setOnline(false)
+        context.ui.toast.show({ message: "Could not save model settings: server plugin unreachable", variant: "warning" })
+        if (at === mutation) {
+          void setSettings((draft) => {
+            draft.models = { primary: { ...before.primary }, fallback: copyFallback(before.fallback) }
+          })
+        } else {
+          void syncSettings(false)
+        }
+        return false
+      }).finally(settle)
+    }
+
     const agentById = (id: string): AgentInfo | undefined => (agentList() ?? []).find((agent) => agent.id === id)
 
     const openSettings = () => {
@@ -215,6 +319,12 @@ export default Plugin.define({
           toggleAnimation={toggleAnimation}
           toggleUi={toggleUi}
           flushSteps={flushSteps}
+          catalog={models}
+          modelSettings={modelSettings}
+          configured={configured}
+          subagents={subagents}
+          savePrimary={savePrimary}
+          saveFallback={saveFallback}
         />
       ))
     }
@@ -250,7 +360,7 @@ export default Plugin.define({
       return index
     })
     const subagentList = createMemo((): AgentInfo[] => {
-      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent").sort((a, b) => a.name.localeCompare(b.name))
+      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent" && SUBAGENT_IDS.includes(agent.id)).sort((a, b) => a.name.localeCompare(b.name))
     })
     const primary = createMemo((): AgentInfo[] => {
       return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent").sort((a, b) => a.name.localeCompare(b.name))
@@ -262,7 +372,7 @@ export default Plugin.define({
       return subagentList().filter((agent) => !isReviewer(agent.id))
     })
     const visibleAgentCount = createMemo((): number => {
-      return (agentList() ?? []).filter((agent) => !agent.hidden).length
+      return primary().length + subagentList().length
     })
 
     const [open, setOpen] = createSignal<Record<string, Record<Section, boolean>>>({})
@@ -277,6 +387,12 @@ export default Plugin.define({
       dataVersion()
       const session = context.data.session.get(sessionID)
       if (session?.agent === agent.id && session.model) return modelName(session.model, modelIndex())
+      const override = modelSettings().primary[agent.id]
+      if (override !== undefined) {
+        const parsed = parseModel(override)
+        if (parsed === undefined) return override
+        return modelName({ providerID: parsed.providerID, id: parsed.modelID, variant: parsed.variant }, modelIndex())
+      }
       return agent.model ? modelName(agent.model, modelIndex()) : "inherit"
     }
 

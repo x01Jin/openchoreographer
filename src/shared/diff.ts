@@ -31,7 +31,7 @@ export function validateDiffInput(input: unknown): ValidatedDiffInput {
   return { mode, base, context, path, stat }
 }
 
-export type ChangeFile = { readonly file: string; readonly patch: string; readonly additions: number; readonly deletions: number }
+type ChangeFile = { readonly file: string; readonly patch: string; readonly additions: number; readonly deletions: number }
 
 // Keyword signals are a floor, not a ceiling: path traversal, SSRF, and deserialization stay judgment calls.
 export function summarizeChanges(files: readonly ChangeFile[]): string {
@@ -62,7 +62,7 @@ export function summarizeChanges(files: readonly ChangeFile[]): string {
   return `Risk: ${files.length} files, +${additions} -${deletions}. Signals: ${signals}. Lenses: ${lenses}.`
 }
 
-export type CollapsedPatch = { patch: string; additions: number; deletions: number }
+type CollapsedPatch = { patch: string; additions: number; deletions: number }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
 

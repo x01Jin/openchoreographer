@@ -45,7 +45,7 @@ export function isQuotaError(error: { status?: number; message?: string }): bool
   return QUOTA_PHRASES.some((phrase) => text.includes(phrase))
 }
 
-export type BreakerOptions = { readonly initialMs: number; readonly maxMs: number; readonly now?: () => number }
+type BreakerOptions = { readonly initialMs: number; readonly maxMs: number; readonly now?: () => number }
 
 export type Breaker = {
   fail(model: ParsedModel, options?: { retryAfterMs?: number }): number
@@ -105,7 +105,7 @@ export function createBreaker(options: BreakerOptions): Breaker {
   }
 }
 
-export type Selection = { readonly model: ParsedModel | undefined; readonly primary: ParsedModel | undefined; readonly fellBack: boolean }
+type Selection = { readonly model: ParsedModel | undefined; readonly primary: ParsedModel | undefined; readonly fellBack: boolean }
 
 export function resultText(value: unknown): string {
   if (typeof value !== "object" || value === null) return ""
@@ -136,7 +136,7 @@ export function isChildQuotaFailure(value: unknown): boolean {
   return text.includes('state="error"') || text.includes('state="failed"')
 }
 
-export type ResultPlan =
+type ResultPlan =
   | { readonly kind: "return"; readonly credit?: ParsedModel }
   | { readonly kind: "retry"; readonly fail?: ParsedModel; readonly model: ParsedModel }
 

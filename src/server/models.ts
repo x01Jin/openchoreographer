@@ -1,11 +1,36 @@
 import type { Plugin } from "@opencode/plugin"
 import { parseModel, type ParsedModel } from "../shared/fallback"
-import type { Options } from "../shared/options"
+import type { ModelSettings } from "../shared/settings"
 
 const PRIMARY_TTL_MS = 30_000
 const primaryCache = new Map<string, { model: ParsedModel | undefined; at: number }>()
 
-export async function resolvePrimary(ctx: Plugin.Context, agent: string): Promise<ParsedModel | undefined> {
+export function formatModelRef(model: ParsedModel): string {
+  return model.variant === undefined ? model.key : model.key + "#" + model.variant
+}
+
+export function resolveFallbacks(agent: string, overrides?: ModelSettings | undefined): readonly ParsedModel[] {
+  if (overrides === undefined || !Object.prototype.hasOwnProperty.call(overrides.fallback, agent)) return []
+  const raw = overrides.fallback[agent]
+  if (!Array.isArray(raw)) return []
+  const parsed: ParsedModel[] = []
+  for (const entry of raw) {
+    if (parsed.length >= 8) break
+    const model = parseModel(entry)
+    if (model === undefined) continue
+    parsed.push(model)
+  }
+  return parsed
+}
+
+export async function resolvePrimary(ctx: Plugin.Context, agent: string, overrides?: ModelSettings | undefined): Promise<ParsedModel | undefined> {
+  if (overrides !== undefined && Object.prototype.hasOwnProperty.call(overrides.primary, agent)) {
+    const raw = overrides.primary[agent]
+    if (typeof raw === "string") {
+      const model = parseModel(raw)
+      if (model !== undefined) return model
+    }
+  }
   const cached = primaryCache.get(agent)
   const now = Date.now()
   if (cached !== undefined && now - cached.at < PRIMARY_TTL_MS) return cached.model
@@ -22,7 +47,7 @@ export async function resolvePrimary(ctx: Plugin.Context, agent: string): Promis
   return model
 }
 
-export async function warnNarrowFallbacks(ctx: Plugin.Context, options: Options): Promise<void> {
+export async function warnNarrowFallbacks(ctx: Plugin.Context, overrides?: ModelSettings | undefined): Promise<void> {
   try {
     const catalog = await ctx.model.list()
     const limits = new Map<string, number>()
@@ -31,9 +56,11 @@ export async function warnNarrowFallbacks(ctx: Plugin.Context, options: Options)
       limits.set(model.providerID + "/" + model.modelID, model.limit.context)
       limits.set(model.providerID + "/" + model.id, model.limit.context)
     }
-    for (const [agent, alternates] of Object.entries(options.fallback)) {
+    const agents = new Set<string>(overrides !== undefined ? Object.keys(overrides.fallback) : [])
+    for (const agent of agents) {
+      const alternates = resolveFallbacks(agent, overrides)
       if (alternates.length === 0) continue
-      const primary = await resolvePrimary(ctx, agent)
+      const primary = await resolvePrimary(ctx, agent, overrides)
       if (primary === undefined) continue
       const primaryLimit = limits.get(primary.key)
       if (primaryLimit === undefined) continue

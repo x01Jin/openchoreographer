@@ -1,7 +1,7 @@
 import type { AgentInfo } from "@opencode/client"
 import { displayWidth } from "../shared/text"
 
-export type ModelRefLike = { id: string; providerID: string; variant?: string }
+type ModelRefLike = { id: string; providerID: string; variant?: string }
 
 export type Section = "agents" | "primary" | "workers" | "reviewers" | "todos"
 
@@ -15,7 +15,7 @@ export const NAME_WIDTH = 15
 export const MODEL_WIDTH = 15
 export const TODO_LIMIT = 12
 
-export const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
+const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
 
 export function normalizeTodoStatus(value: unknown): TodoItem["status"] {
   return typeof value === "string" && TODO_STATUSES.includes(value)
@@ -23,9 +23,9 @@ export function normalizeTodoStatus(value: unknown): TodoItem["status"] {
     : "pending"
 }
 
-export type GraphemeSegmenter = { segment(value: string): Iterable<{ segment: string }> }
+type GraphemeSegmenter = { segment(value: string): Iterable<{ segment: string }> }
 
-export function createSegmenter(): GraphemeSegmenter | undefined {
+function createSegmenter(): GraphemeSegmenter | undefined {
   try {
     const Ctor = (Intl as unknown as { Segmenter?: new (locales?: string, options?: { granularity: string }) => GraphemeSegmenter }).Segmenter
     return Ctor ? new Ctor(undefined, { granularity: "grapheme" }) : undefined
@@ -34,7 +34,7 @@ export function createSegmenter(): GraphemeSegmenter | undefined {
   }
 }
 
-export const segmenter = createSegmenter()
+const segmenter = createSegmenter()
 
 export function sanitize(value: string): string {
   return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
@@ -76,7 +76,7 @@ export function modelName(ref: ModelRefLike, index: Map<string, string>): string
   return ref.variant ? `${name}#${ref.variant}` : name
 }
 
-export const PALETTE = ["#8aadf4", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6", "#8bd5ca", "#ed8796", "#ee99a0"]
+const PALETTE = ["#8aadf4", "#a6da95", "#eed49f", "#f5a97f", "#c6a0f6", "#8bd5ca", "#ed8796", "#ee99a0"]
 
 export function hashColor(id: string): string {
   let hash = 0

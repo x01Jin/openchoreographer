@@ -4,8 +4,8 @@ import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normaliz
 
 describe("normalizeSettings", () => {
   test("defaults for undefined and null", () => {
-    assert.deepEqual(normalizeSettings(undefined), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {} })
-    assert.deepEqual(normalizeSettings(null), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {} })
+    assert.deepEqual(normalizeSettings(undefined), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} } })
+    assert.deepEqual(normalizeSettings(null), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} } })
   })
 
   test("keeps booleans and replaces non-booleans with the default", () => {
@@ -132,6 +132,9 @@ describe("normalizeSnapshot", () => {
         steps: { backend: 30 },
         defaults: { backend: 20, legacy: null },
         managed: ["backend"],
+        models: { primary: {}, fallback: {} },
+        configured: {},
+        subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"],
       },
     )
   })
@@ -204,6 +207,207 @@ describe("normalizeSnapshot", () => {
       steps: { backend: 30 },
       defaults: { backend: 20, legacy: null },
       managed: ["backend"],
+      models: { primary: {}, fallback: {} },
+      configured: {},
+      subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"],
     })
   })
+
+  test("defaults missing models, configured, and subagents instead of returning undefined", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+    })
+    assert.deepEqual(snap?.models, { primary: {}, fallback: {} })
+    assert.deepEqual(snap?.configured, {})
+    assert.deepEqual(snap?.subagents, ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"])
+  })
+
+  test("keeps stored model overrides on the snapshot", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: ["backend"],
+      models: { primary: { backend: "anthropic/claude-sonnet-4" }, fallback: { backend: ["openai/gpt-5"] } },
+      configured: { backend: "anthropic/claude-sonnet-4" },
+      subagents: ["backend"],
+    })
+    assert.deepEqual(snap?.models, { primary: { backend: "anthropic/claude-sonnet-4" }, fallback: { backend: ["openai/gpt-5"] } })
+    assert.deepEqual(snap?.configured, { backend: "anthropic/claude-sonnet-4" })
+    assert.deepEqual(snap?.subagents, ["backend"])
+  })
+
+  test("drops a stored orchestrator model while keeping the 10 subagents", () => {
+    const subagents = ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"]
+    const primary: Record<string, string> = { orchestrator: "a/b" }
+    const fallback: Record<string, string[]> = { orchestrator: ["a/b"] }
+    const configured: Record<string, string> = { orchestrator: "a/b" }
+    for (const id of subagents) {
+      primary[id] = "a/b"
+      fallback[id] = ["a/b"]
+      configured[id] = "a/b"
+    }
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: ["orchestrator", ...subagents],
+      models: { primary, fallback },
+      configured,
+    })
+    assert.equal(snap?.models.primary.orchestrator, undefined)
+    assert.equal(snap?.models.fallback.orchestrator, undefined)
+    assert.equal(snap?.configured.orchestrator, undefined)
+    assert.equal(Object.keys(snap?.models.primary ?? {}).length, 10)
+    assert.equal(Object.keys(snap?.models.fallback ?? {}).length, 10)
+    assert.equal(Object.keys(snap?.configured ?? {}).length, 10)
+    for (const id of subagents) {
+      assert.equal(snap?.models.primary[id], "a/b")
+      assert.deepEqual(snap?.models.fallback[id], ["a/b"])
+      assert.equal(snap?.configured[id], "a/b")
+    }
+  })
 })
+
+describe("defaultSettings models", () => {
+  test("ships empty primary and fallback maps", () => {
+    assert.deepEqual(defaultSettings().models, { primary: {}, fallback: {} })
+  })
+})
+
+describe("normalizeSettings models", () => {
+  test("fills models for a legacy payload without them", () => {
+    assert.deepEqual(normalizeSettings({ steps: { backend: 30 } }).models, { primary: {}, fallback: {} })
+    assert.deepEqual(normalizeSettings({}, ["backend"]).models, { primary: {}, fallback: {} })
+  })
+
+  test("keeps valid refs including variants", () => {
+    const normalized = normalizeSettings({
+      models: {
+        primary: { backend: "anthropic/claude-sonnet-4", frontend: "openai/gpt-5#high" },
+        fallback: { backend: ["openai/gpt-5", "anthropic/claude-sonnet-4#high"] },
+      },
+    })
+    assert.deepEqual(normalized.models, {
+      primary: { backend: "anthropic/claude-sonnet-4", frontend: "openai/gpt-5#high" },
+      fallback: { backend: ["openai/gpt-5", "anthropic/claude-sonnet-4#high"] },
+    })
+  })
+
+  test("drops unknown and non-subagent ids from model maps", () => {
+    const normalized = normalizeSettings({
+      models: {
+        primary: { backend: "anthropic/claude-sonnet-4", bogus: "anthropic/claude-sonnet-4" },
+        fallback: { backend: ["openai/gpt-5"], bogus: ["openai/gpt-5"] },
+      },
+    })
+    assert.deepEqual(normalized.models, {
+      primary: { backend: "anthropic/claude-sonnet-4" },
+      fallback: { backend: ["openai/gpt-5"] },
+    })
+  })
+
+  test("drops __proto__, constructor, and prototype model entries", () => {
+    const parsed = JSON.parse('{"models":{"primary":{"__proto__":"a/b","constructor":"a/b","prototype":"a/b","backend":"a/b"},"fallback":{"__proto__":["a/b"],"constructor":["a/b"],"prototype":["a/b"],"backend":["a/b"]}}}')
+    assert.deepEqual(normalizeSettings(parsed).models, { primary: { backend: "a/b" }, fallback: { backend: ["a/b"] } })
+  })
+
+  test("drops malformed refs and overlong strings", () => {
+    const long = "p/" + "x".repeat(200)
+    const normalized = normalizeSettings({
+      models: {
+        primary: { explore: "bad", backend: "", frontend: "a/b c", database: "a/b#", devops: "/x", tester: "a/", designer: long, writer: "a/b" },
+        fallback: { explore: ["bad", "a/b"], backend: "a/b", frontend: [42, "a/b"], database: [long] },
+      },
+    })
+    assert.deepEqual(normalized.models.primary, { writer: "a/b" })
+    assert.deepEqual(normalized.models.fallback, { explore: ["a/b"], frontend: ["a/b"] })
+  })
+
+  test("caps agents at 32 and fallbacks at 8", () => {
+    const primary: Record<string, string> = {}
+    for (const id of ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security"]) primary[id] = "a/b"
+    for (let i = 0; i < 30; i += 1) primary[`id${i}`] = "a/b"
+    assert.equal(Object.keys(normalizeSettings({ models: { primary } }).models.primary).length, 10)
+    const refs = Array.from({ length: 12 }, (_, i) => `p/m${i}`)
+    assert.equal(normalizeSettings({ models: { fallback: { backend: refs } } }).models.fallback.backend.length, 8)
+  })
+
+  test("keeps an explicit empty fallback list", () => {
+    assert.deepEqual(normalizeSettings({ models: { fallback: { backend: [] } } }).models.fallback, { backend: [] })
+  })
+
+  test("drops orchestrator overrides while keeping a subagent entry", () => {
+    const normalized = normalizeSettings({
+      models: {
+        primary: { orchestrator: "a/b", backend: "c/d" },
+        fallback: { orchestrator: ["a/b"], backend: ["c/d"] },
+      },
+    }, ["orchestrator", "backend"])
+    assert.deepEqual(normalized.models, { primary: { backend: "c/d" }, fallback: { backend: ["c/d"] } })
+  })
+})
+
+describe("mergeSettings models", () => {
+  test("sets a primary override", () => {
+    const merged = mergeSettings(defaultSettings(), { models: { primary: { backend: "anthropic/claude-sonnet-4" } } }, ["backend"])
+    assert.deepEqual(merged.models.primary, { backend: "anthropic/claude-sonnet-4" })
+  })
+
+  test("null deletes a primary override", () => {
+    const current = mergeSettings(defaultSettings(), { models: { primary: { backend: "a/b" } } }, ["backend"])
+    assert.deepEqual(mergeSettings(current, { models: { primary: { backend: null } } }, ["backend"]).models.primary, {})
+  })
+
+  test("an invalid primary string leaves the current value untouched", () => {
+    const current = mergeSettings(defaultSettings(), { models: { primary: { backend: "a/b" } } }, ["backend"])
+    assert.deepEqual(mergeSettings(current, { models: { primary: { backend: "bad" } } }, ["backend"]).models.primary, { backend: "a/b" })
+  })
+
+  test("replaces a fallback list and allows an empty list", () => {
+    const current = mergeSettings(defaultSettings(), { models: { fallback: { backend: ["a/b"] } } }, ["backend"])
+    assert.deepEqual(
+      mergeSettings(current, { models: { fallback: { backend: ["c/d", "e/f"] } } }, ["backend"]).models.fallback,
+      { backend: ["c/d", "e/f"] },
+    )
+    assert.deepEqual(
+      mergeSettings(current, { models: { fallback: { backend: [] } } }, ["backend"]).models.fallback,
+      { backend: [] },
+    )
+  })
+
+  test("null clears a fallback override", () => {
+    const current = mergeSettings(defaultSettings(), { models: { fallback: { backend: ["a/b"] } } }, ["backend"])
+    assert.deepEqual(mergeSettings(current, { models: { fallback: { backend: null } } }, ["backend"]).models.fallback, {})
+  })
+
+  test("ignores ids outside the managed set", () => {
+    const merged = mergeSettings(defaultSettings(), { models: { primary: { bogus: "a/b" }, fallback: { bogus: ["a/b"] } } }, ["backend"])
+    assert.deepEqual(merged.models, { primary: {}, fallback: {} })
+  })
+
+  test("does not mutate the current models", () => {
+    const current = mergeSettings(defaultSettings(), { models: { primary: { backend: "a/b" }, fallback: { backend: ["a/b"] } } }, ["backend"])
+    const before = JSON.parse(JSON.stringify(current.models))
+    mergeSettings(current, { models: { primary: { backend: "c/d" }, fallback: { backend: ["c/d"] } } }, ["backend"])
+    assert.deepEqual(current.models, before)
+  })
+
+  test("drops orchestrator overrides from a patch while keeping a subagent entry", () => {
+    const merged = mergeSettings(
+      defaultSettings(),
+      { models: { primary: { orchestrator: "a/b", backend: "c/d" }, fallback: { orchestrator: ["a/b"], backend: ["c/d"] } } },
+      ["orchestrator", "backend"],
+    )
+    assert.deepEqual(merged.models, { primary: { backend: "c/d" }, fallback: { backend: ["c/d"] } })
+  })
+
+  test("drops a stored orchestrator entry that predates the fix", () => {
+    const current = { ...defaultSettings(), models: { primary: { orchestrator: "a/b", backend: "c/d" }, fallback: { orchestrator: ["a/b"], backend: ["c/d"] } } }
+    const merged = mergeSettings(current, {}, ["orchestrator", "backend"])
+    assert.deepEqual(merged.models, { primary: { backend: "c/d" }, fallback: { backend: ["c/d"] } })
+  })
+});

@@ -1,8 +1,8 @@
 import type { Plugin } from "@opencode/plugin"
 import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult } from "../shared/fallback"
-import type { Options } from "../shared/options"
 import { clipResultStats } from "../shared/results"
-import { resolvePrimary } from "./models"
+import type { ModelSettings } from "../shared/settings"
+import { formatModelRef, resolveFallbacks, resolvePrimary } from "./models"
 import { changedFiles, changedTreeError, readTree, treeKey } from "./tree"
 
 const breaker = createBreaker({ initialMs: 5 * 60_000, maxMs: 60 * 60_000 })
@@ -14,20 +14,20 @@ export function resetFallbackWrapper(): void {
 
 export { breaker }
 
-export function retryHook(ctx: Plugin.Context, options: Options) {
+export function retryHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.session.hook("retry", (event) => {
     if (!isQuotaError(event.error)) return
     // The host Model.Ref splits provider and id, so rejoin them for breaker accounting.
     const current = parseModel(event.model.providerID + "/" + event.model.id + (event.model.variant ? "#" + event.model.variant : ""))
     if (current === undefined) return
     breaker.fail(current, { retryAfterMs: event.error.retryAfterMs })
-    const alternates = options.fallback[event.agent]
+    const alternates = resolveFallbacks(event.agent, getModels())
     // Only suppress the host retry when the wrapper can actually route to a fallback.
     if (alternates !== undefined && alternates.length > 0 && wrapperInstalled) event.decision = { retry: false }
   })
 }
 
-export function subagentBeforeHook(ctx: Plugin.Context, options: Options) {
+export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.tool.hook("execute.before", async (event) => {
     if (event.tool !== "subagent") return
     if (typeof event.input !== "object" || event.input === null) return
@@ -35,22 +35,29 @@ export function subagentBeforeHook(ctx: Plugin.Context, options: Options) {
     const record = event.input as Record<string, unknown>
     if (typeof record.agent !== "string") return
     const agent = record.agent
-    const alternates = options.fallback[agent]
-    if (alternates === undefined || alternates.length === 0) return
-    const configured = await resolvePrimary(ctx, agent)
-    if (configured === undefined) return
-    let primary = configured
+    const overrides = getModels()
+    const alternates = resolveFallbacks(agent, overrides)
+    const configured = await resolvePrimary(ctx, agent, overrides)
     const raw = record.model
-    if (typeof raw === "string") {
-      const requested = parseModel(raw)
-      if (requested !== undefined) {
-        if (breaker.available(requested)) return
-        primary = requested
+    const requested = typeof raw === "string" ? parseModel(raw) : undefined
+    if (requested !== undefined) {
+      if (breaker.available(requested)) return
+      const choice = chooseModel({ primary: requested, alternates, available: (m) => breaker.available(m) })
+      if (choice.model !== undefined && choice.fellBack) {
+        record.model = formatModelRef(choice.model)
       }
+      return
     }
-    const choice = chooseModel({ primary, alternates, available: (m) => breaker.available(m) })
-    if (choice.model !== undefined && choice.fellBack) {
-      record.model = choice.model.key + (choice.model.variant ? "#" + choice.model.variant : "")
+    if (configured === undefined) return
+    const choice = chooseModel({ primary: configured, alternates, available: (m) => breaker.available(m) })
+    if (choice.model === undefined) return
+    if (choice.fellBack) {
+      record.model = formatModelRef(choice.model)
+      return
+    }
+    const hasOverride = Object.prototype.hasOwnProperty.call(overrides.primary, agent)
+    if (hasOverride && record.model !== formatModelRef(choice.model)) {
+      record.model = formatModelRef(choice.model)
     }
   })
 }
@@ -89,7 +96,7 @@ export function subagentAfterHook(ctx: Plugin.Context) {
   })
 }
 
-export function subagentTransform(ctx: Plugin.Context, options: Options) {
+export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.tool.transform((editor) => {
     const target = editor.get("subagent")
     if (target === undefined || typeof target.execute !== "function") return
@@ -100,25 +107,36 @@ export function subagentTransform(ctx: Plugin.Context, options: Options) {
         const fields = input as Record<string, unknown>
         const startedAt = Date.now()
         const agent = typeof fields.agent === "string" ? fields.agent : undefined
+        const overrides = getModels()
+        const alternatesForAgent = agent !== undefined ? resolveFallbacks(agent, overrides) : []
         const used =
           typeof fields.model === "string"
             ? parseModel(fields.model)
             : agent === undefined
               ? undefined
-              : await resolvePrimary(ctx, agent)
+              : await resolvePrimary(ctx, agent, overrides)
         let baseline: ReadonlySet<string> | undefined
+        let spawn = input
+        if (agent !== undefined && fields.model === undefined && Object.prototype.hasOwnProperty.call(overrides.primary, agent)) {
+          const parsed = parseModel(overrides.primary[agent])
+          if (parsed !== undefined) {
+            const ref = formatModelRef(parsed)
+            fields.model = ref
+            spawn = { ...fields, model: ref }
+          }
+        }
         try {
           // The baseline is status-based: a file already dirty at spawn and edited further is not detected.
-          if (agent !== undefined && options.fallback[agent]?.length) {
+          if (agent !== undefined && alternatesForAgent.length > 0) {
             const tree = await readTree(ctx)
             if (tree !== undefined) baseline = new Set(tree.map(treeKey))
           }
-          const result = await original(input, context)
+          const result = await original(spawn, context)
           const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
           const plan = planResultFallback({
             result,
             actual,
-            alternates: agent !== undefined ? (options.fallback[agent] ?? []) : [],
+            alternates: alternatesForAgent,
             available: (m) => breaker.available(m),
             aborted: context.signal.aborted,
           })
@@ -128,7 +146,7 @@ export function subagentTransform(ctx: Plugin.Context, options: Options) {
             return result
           }
           if (agent !== undefined) {
-            const alternates = options.fallback[agent] ?? []
+            const alternates = alternatesForAgent
             if (alternates.length > 0) {
               if (plan.fail !== undefined) breaker.fail(plan.fail)
               const alternate = plan.model
@@ -139,7 +157,7 @@ export function subagentTransform(ctx: Plugin.Context, options: Options) {
                   if (changed.length > 0) return result
                 }
               }
-              const next = alternate.key + (alternate.variant ? "#" + alternate.variant : "")
+              const next = formatModelRef(alternate)
               try {
                 const retried = await original({ ...fields, model: next }, context)
                 const settled = planRetriedResult({ result: retried, alternate })
@@ -159,7 +177,7 @@ export function subagentTransform(ctx: Plugin.Context, options: Options) {
           const message = error instanceof Error ? error.message : String(error)
           if (/abort|cancel/i.test(message)) throw error
           if (agent === undefined) throw error
-          const alternates = options.fallback[agent] ?? []
+          const alternates = alternatesForAgent
           const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
           const failed = actual ?? used
           if (failed === undefined || alternates === undefined || alternates.length === 0) throw error
@@ -177,7 +195,7 @@ export function subagentTransform(ctx: Plugin.Context, options: Options) {
               if (changed.length > 0) throw changedTreeError(error, changed)
             }
           }
-          const alternate = choice.model.key + (choice.model.variant ? "#" + choice.model.variant : "")
+          const alternate = formatModelRef(choice.model)
           try {
             const result = await original({ ...fields, model: alternate }, context)
             breaker.succeed(choice.model, startedAt)

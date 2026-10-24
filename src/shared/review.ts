@@ -1,6 +1,6 @@
 import type { Options } from "./options"
 
-export type Lens = {
+type Lens = {
   readonly id: string
   readonly label: string
   readonly focus: readonly string[]

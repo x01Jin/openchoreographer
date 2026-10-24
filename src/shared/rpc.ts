@@ -30,6 +30,26 @@ const defaultsSchema = {
   additionalProperties: { type: ["integer", "null"] },
 } as const
 
+const modelsSchema = {
+  type: "object",
+  properties: {
+    primary: { type: "object", additionalProperties: { type: "string" } },
+    fallback: { type: "object", additionalProperties: { type: "array", items: { type: "string" } } },
+  },
+  required: ["primary", "fallback"],
+  additionalProperties: false,
+} as const
+
+const configuredSchema = {
+  type: "object",
+  additionalProperties: { type: ["string", "null"] },
+} as const
+
+const subagentsSchema = {
+  type: "array",
+  items: { type: "string" },
+} as const
+
 const snapshotSchema = {
   type: "object",
   properties: {
@@ -38,8 +58,11 @@ const snapshotSchema = {
     steps: stepsSchema,
     defaults: defaultsSchema,
     managed: { type: "array", items: { type: "string" } },
+    models: modelsSchema,
+    configured: configuredSchema,
+    subagents: subagentsSchema,
   },
-  required: ["animations", "ui", "steps", "defaults", "managed"],
+  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents"],
   additionalProperties: false,
 } as const
 
@@ -69,6 +92,14 @@ const setSettings = {
         properties: {
           todos: { type: "boolean" },
           roster: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      models: {
+        type: "object",
+        properties: {
+          primary: { type: "object", additionalProperties: { type: ["string", "null"] } },
+          fallback: { type: "object", additionalProperties: { type: ["array", "null"], items: { type: "string" } } },
         },
         additionalProperties: false,
       },
