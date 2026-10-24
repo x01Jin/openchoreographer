@@ -1,9 +1,9 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@opencode/client"
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { For, Show, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { isReviewer } from "./shared"
+import { displayWidth, isReviewer, isSidebarStatusEvent, shouldRefreshSidebar } from "./shared"
 import { STEPS_STEP, clampSteps, defaultSettings, normalizeSnapshot } from "./settings"
 import type { ChoreographerSettings, Ui } from "./settings"
 import { ChoreographerRpc } from "./rpc"
@@ -47,16 +47,39 @@ function sanitize(value: string): string {
   return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
 }
 
+const truncateCache = new Map<string, string>()
+
 function truncate(value: string, width: number): string {
+  const key = `${width}:${value}`
+  const hit = truncateCache.get(key)
+  if (hit !== undefined) return hit
   const clean = sanitize(value)
-  const cells = segmenter ? Array.from(segmenter.segment(clean), (part) => part.segment) : Array.from(clean)
-  if (cells.length <= width) return clean
-  return cells.slice(0, Math.max(1, width - 1)).join("") + "…"
+  let result: string
+  if (/^[\x00-\x7F]*$/.test(clean) && clean.length <= width) {
+    result = clean
+  } else {
+    const cells = segmenter ? Array.from(segmenter.segment(clean), (part) => part.segment) : Array.from(clean)
+    let total = 0
+    for (const cell of cells) total += displayWidth(cell)
+    if (total <= width) result = clean
+    else {
+      let used = 0
+      let end = 0
+      for (; end < cells.length; end += 1) {
+        const cellWidth = displayWidth(cells[end])
+        if (used + cellWidth > width - 1) break
+        used += cellWidth
+      }
+      result = cells.slice(0, end).join("") + "…"
+    }
+  }
+  if (truncateCache.size > 512) truncateCache.clear()
+  truncateCache.set(key, result)
+  return result
 }
 
-function modelName(ref: ModelRefLike, models: ModelInfo[]): string {
-  const model = models.find((candidate) => candidate.providerID === ref.providerID && (candidate.id === ref.id || candidate.modelID === ref.id))
-  const name = model?.name?.trim() || `${ref.providerID}/${ref.id}`
+function modelName(ref: ModelRefLike, index: Map<string, string>): string {
+  const name = index.get(`${ref.providerID}/${ref.id}`) ?? `${ref.providerID}/${ref.id}`
   return ref.variant ? `${name}#${ref.variant}` : name
 }
 
@@ -98,7 +121,13 @@ function FlowingLabel(props: { text: string; animate: boolean }) {
     const timer = setInterval(() => setPhase((value) => value + 1), 140)
     onCleanup(() => clearInterval(timer))
   })
-  const chars = createMemo(() => Array.from(props.text))
+  const slices = createMemo(() => {
+    const all = Array.from(props.text)
+    if (all.length < 3) return [all.join("")]
+    const cut1 = Math.ceil(all.length / 3)
+    const cut2 = Math.ceil((all.length * 2) / 3)
+    return [all.slice(0, cut1).join(""), all.slice(cut1, cut2).join(""), all.slice(cut2).join("")]
+  })
   return (
     <Show
       when={props.animate}
@@ -106,13 +135,18 @@ function FlowingLabel(props: { text: string; animate: boolean }) {
         <text fg={FLOW[0]} selectable={false} attributes={TextAttributes.BOLD}>{props.text}</text>
       }
     >
-      <box flexDirection="row">
-        <For each={chars()}>
-          {(char, index) => (
-            <text fg={FLOW[((phase() - index()) % FLOW.length + FLOW.length) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{char}</text>
-          )}
-        </For>
-      </box>
+      <Show
+        when={slices().length === 3}
+        fallback={
+          <text fg={FLOW[(phase() + 0) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[0]}</text>
+        }
+      >
+        <box flexDirection="row">
+          <text fg={FLOW[(phase() + 0) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[0]}</text>
+          <text fg={FLOW[(phase() + 3) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[1]}</text>
+          <text fg={FLOW[(phase() + 6) % FLOW.length]} selectable={false} attributes={TextAttributes.BOLD}>{slices()[2]}</text>
+        </box>
+      </Show>
     </Show>
   )
 }
@@ -122,8 +156,10 @@ export default Plugin.define({
   async setup(context) {
     const location = context.location ?? context.data.location.default()
 
-    const [tick, setTick] = createSignal(0)
-    const bump = () => setTick((n) => n + 1)
+    const [dataVersion, setDataVersion] = createSignal(0)
+    const bump = () => setDataVersion((n) => n + 1)
+    const [metadataVersion, setMetadataVersion] = createSignal(0)
+    const [currentSession, setCurrentSession] = createSignal<string | undefined>(undefined)
 
     const sync = async (notify: boolean) => {
       const results = await Promise.allSettled([
@@ -135,7 +171,7 @@ export default Plugin.define({
       }
       bump()
     }
-    await sync(true)
+    void sync(true)
 
     const [settings, setSettings] = context.storage.store<ChoreographerSettings>("openchoreographer.settings", { initial: defaultSettings() })
     const loadedUi = (settings as { ui?: Partial<Ui> }).ui
@@ -161,14 +197,40 @@ export default Plugin.define({
     const applySnapshot = (value: unknown) => {
       const snap = normalizeSnapshot(value)
       if (snap === undefined) return
-      void setSettings((draft) => {
-        draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
-        draft.ui = { todos: snap.ui.todos, roster: snap.ui.roster }
-        draft.steps = { ...snap.steps }
+      const currentSteps = settings.steps
+      const snapSteps = snap.steps
+      const currentKeys = Object.keys(currentSteps)
+      const snapKeys = Object.keys(snapSteps)
+      const stepsSame =
+        currentKeys.length === snapKeys.length &&
+        snapKeys.every((key) => currentSteps[key] === snapSteps[key])
+      const currentManaged = managed()
+      const managedSame =
+        currentManaged.length === snap.managed.length &&
+        snap.managed.every((id, index) => currentManaged[index] === id)
+      const currentDefaults = defaults()
+      const defaultKeys = Object.keys(currentDefaults)
+      const snapDefaultKeys = Object.keys(snap.defaults)
+      const defaultsSame =
+        defaultKeys.length === snapDefaultKeys.length &&
+        snapDefaultKeys.every((key) => currentDefaults[key] === snap.defaults[key])
+      const animationsSame =
+        settings.animations.todo === snap.animations.todo &&
+        settings.animations.running === snap.animations.running
+      const uiSame =
+        (settings.ui?.todos ?? true) === snap.ui.todos &&
+        (settings.ui?.roster ?? true) === snap.ui.roster
+      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame) return
+      batch(() => {
+        void setSettings((draft) => {
+          draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
+          draft.ui = { todos: snap.ui.todos, roster: snap.ui.roster }
+          draft.steps = { ...snap.steps }
+        })
+        setManaged([...snap.managed])
+        setDefaults({ ...snap.defaults })
+        bump()
       })
-      setManaged([...snap.managed])
-      setDefaults({ ...snap.defaults })
-      bump()
     }
 
     const syncSettings = async (notify: boolean): Promise<boolean> => {
@@ -187,7 +249,6 @@ export default Plugin.define({
     }
     const settle = () => {
       inflight -= 1
-      if (inflight === 0 && !disposed) void syncSettings(false)
     }
     void syncSettings(false).then((ok) => {
       if (ok || disposed) return
@@ -231,26 +292,49 @@ export default Plugin.define({
       }).finally(settle)
     }
 
-    const saveSteps = (id: string, value: number) => {
-      mutation += 1
-      void setSettings((draft) => { draft.steps[id] = value })
+    let stepsTimer: ReturnType<typeof setTimeout> | undefined
+    const pendingSteps = new Map<string, number | null>()
+    const flushSteps = () => {
+      if (pendingSteps.size === 0) return
+      const payload: Record<string, number | null> = {}
+      for (const [id, value] of pendingSteps) payload[id] = value
+      const before = { ...settings.steps }
+      pendingSteps.clear()
+      if (stepsTimer !== undefined) {
+        clearTimeout(stepsTimer)
+        stepsTimer = undefined
+      }
+      const at = mutation
       inflight += 1
-      void rpc.setSettings({ steps: { [id]: value } }, callOptions).catch(() => {
+      void rpc.setSettings({ steps: payload }, callOptions).then((snap) => {
+        if (at !== mutation) return
+        applySnapshot(snap)
+      }).catch(() => {
         setOnline(false)
         context.ui.toast.show({ message: "Could not save steps: server plugin unreachable", variant: "warning" })
+        void setSettings((draft) => {
+          draft.steps = before
+        })
         void syncSettings(false)
       }).finally(settle)
     }
+    const queueSteps = (id: string, value: number | null) => {
+      mutation += 1
+      void setSettings((draft) => {
+        if (value === null) delete draft.steps[id]
+        else draft.steps[id] = value
+      })
+      pendingSteps.set(id, value)
+      if (stepsTimer !== undefined) clearTimeout(stepsTimer)
+      stepsTimer = setTimeout(flushSteps, 200)
+    }
+
+    const saveSteps = (id: string, value: number) => {
+      queueSteps(id, value)
+    }
 
     const resetSteps = (id: string) => {
-      mutation += 1
-      void setSettings((draft) => { delete draft.steps[id] })
-      inflight += 1
-      void rpc.setSettings({ steps: { [id]: null } }, callOptions).catch(() => {
-        setOnline(false)
-        context.ui.toast.show({ message: "Could not save steps: server plugin unreachable", variant: "warning" })
-        void syncSettings(false)
-      }).finally(settle)
+      queueSteps(id, null)
     }
 
     type SettingsRow =
@@ -258,7 +342,7 @@ export default Plugin.define({
       | { kind: "ui"; key: "todos" | "roster"; label: string }
       | { kind: "agent"; id: string; label: string }
 
-    const agentById = (id: string): AgentInfo | undefined => (agents() ?? []).find((agent) => agent.id === id)
+    const agentById = (id: string): AgentInfo | undefined => (agentList() ?? []).find((agent) => agent.id === id)
 
     const openSettings = () => {
       if (inflight === 0) void syncSettings(false)
@@ -268,6 +352,9 @@ export default Plugin.define({
 
     const SettingsPanel = () => {
       const [selected, setSelected] = createSignal(0)
+      onCleanup(() => {
+        if (pendingSteps.size > 0) flushSteps()
+      })
       let scrollRef: ScrollBoxRenderable | undefined
       const rows = createMemo((): SettingsRow[] => {
         const list: SettingsRow[] = [
@@ -469,30 +556,38 @@ export default Plugin.define({
       }],
     }))
 
-    const agents = (): AgentInfo[] | undefined => {
-      tick()
+    const agentList = createMemo((): AgentInfo[] | undefined => {
+      dataVersion()
       return context.data.location.agent.list(location)
-    }
-    const models = (): ModelInfo[] => {
-      tick()
+    })
+    const models = createMemo((): ModelInfo[] => {
+      dataVersion()
       return context.data.location.model.list(location) ?? []
-    }
-    const primary = (): AgentInfo[] => {
-      tick()
-      return (agents() ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent").sort((a, b) => a.name.localeCompare(b.name))
-    }
-    const subagents = (): AgentInfo[] => {
-      tick()
-      return (agents() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent").sort((a, b) => a.name.localeCompare(b.name))
-    }
-    const reviewers = (): AgentInfo[] => {
-      tick()
-      return subagents().filter((agent) => isReviewer(agent.id))
-    }
-    const workers = (): AgentInfo[] => {
-      tick()
-      return subagents().filter((agent) => !isReviewer(agent.id))
-    }
+    })
+    const modelIndex = createMemo((): Map<string, string> => {
+      const index = new Map<string, string>()
+      for (const model of models()) {
+        const label = model?.name?.trim() || `${model.providerID}/${model.id}`
+        index.set(`${model.providerID}/${model.id}`, label)
+        if (model.modelID && model.modelID !== model.id) index.set(`${model.providerID}/${model.modelID}`, label)
+      }
+      return index
+    })
+    const subagentList = createMemo((): AgentInfo[] => {
+      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent").sort((a, b) => a.name.localeCompare(b.name))
+    })
+    const primary = createMemo((): AgentInfo[] => {
+      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent").sort((a, b) => a.name.localeCompare(b.name))
+    })
+    const reviewers = createMemo((): AgentInfo[] => {
+      return subagentList().filter((agent) => isReviewer(agent.id))
+    })
+    const workers = createMemo((): AgentInfo[] => {
+      return subagentList().filter((agent) => !isReviewer(agent.id))
+    })
+    const visibleAgentCount = createMemo((): number => {
+      return (agentList() ?? []).filter((agent) => !agent.hidden).length
+    })
 
     const [open, setOpen] = createSignal<Record<string, Record<Section, boolean>>>({})
     const DEFAULT_OPEN: Record<Section, boolean> = { agents: true, primary: false, workers: false, reviewers: false, todos: true }
@@ -503,14 +598,16 @@ export default Plugin.define({
     }
 
     const activeModel = (agent: AgentInfo, sessionID: string): string => {
-      tick()
+      dataVersion()
       const session = context.data.session.get(sessionID)
-      if (session?.agent === agent.id && session.model) return modelName(session.model, models())
-      return agent.model ? modelName(agent.model, models()) : "inherit"
+      if (session?.agent === agent.id && session.model) return modelName(session.model, modelIndex())
+      return agent.model ? modelName(agent.model, modelIndex()) : "inherit"
     }
 
-    const running = (sessionID: string): SessionInfo[] => {
-      tick()
+    const running = (): SessionInfo[] => {
+      dataVersion()
+      const sessionID = currentSession()
+      if (sessionID === undefined) return []
       const result: SessionInfo[] = []
       for (const id of context.data.session.family(sessionID)) {
         if (id === sessionID) continue
@@ -520,10 +617,14 @@ export default Plugin.define({
       return result
     }
 
+    const todoCache = new WeakMap<object, { raw: object; version: number; items: TodoItem[] }>()
     const todoItems = (sessionID: string): TodoItem[] => {
-      tick()
+      dataVersion()
+      const version = metadataVersion()
       const raw = context.data.session.get(sessionID)?.metadata?.["openchoreographer.todos"]
       if (!Array.isArray(raw)) return []
+      const cached = todoCache.get(raw)
+      if (cached !== undefined && cached.raw === raw && cached.version === version) return cached.items
       const items: TodoItem[] = []
       for (const entry of raw) {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
@@ -536,6 +637,7 @@ export default Plugin.define({
           status: normalizeTodoStatus(record.status),
         })
       }
+      todoCache.set(raw, { raw, version, items })
       return items
     }
 
@@ -552,8 +654,7 @@ export default Plugin.define({
       if (active && todoTimer === undefined) {
         todoTimer = setInterval(() => {
           setTodoPhase((value) => value + 3)
-          context.renderer.requestRender()
-        }, 60)
+        }, 120)
       } else if (!active && todoTimer !== undefined) {
         clearInterval(todoTimer)
         todoTimer = undefined
@@ -577,7 +678,10 @@ export default Plugin.define({
     )
 
     const row = (agent: AgentInfo, sessionID: string) => {
-      const active = () => { tick(); return context.data.session.get(sessionID)?.agent === agent.id }
+      const active = () => {
+        dataVersion()
+        return context.data.session.get(sessionID)?.agent === agent.id
+      }
       return (
         <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
           <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
@@ -598,8 +702,8 @@ export default Plugin.define({
     }
 
     const runningRow = (session: SessionInfo) => {
-      const agent = () => { tick(); return (agents() ?? []).find((candidate) => candidate.id === session.agent) }
-      const model = () => { tick(); const found = agent(); return session.model ? modelName(session.model, models()) : found?.model ? modelName(found.model, models()) : "inherit" }
+      const agent = () => (agentList() ?? []).find((candidate) => candidate.id === session.agent)
+      const model = () => { const found = agent(); return session.model ? modelName(session.model, modelIndex()) : found?.model ? modelName(found.model, modelIndex()) : "inherit" }
       return (
         <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
           <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
@@ -648,52 +752,71 @@ export default Plugin.define({
       )
     }
 
-    const seen = new Set<string>()
     let refreshToasted = false
+    let pendingRoster = false
 
-    const refresh = async () => {
-      context.data.location.agent.invalidate(location)
-      context.data.location.model.invalidate(location)
-      const ids = new Set<string>()
-      for (const root of seen) for (const id of context.data.session.family(root)) ids.add(id)
+    const refresh = async (syncRoster: boolean) => {
+      if (syncRoster) {
+        context.data.location.agent.invalidate(location)
+        context.data.location.model.invalidate(location)
+      }
+      const current = currentSession()
+      const ids = current !== undefined ? [...context.data.session.family(current)] : []
       for (const id of ids) {
         try {
           context.data.session.invalidate(id)
-          await context.data.session.sync(id)
         } catch { /* per-session failures retry on the next event */ }
       }
-      const results = await Promise.allSettled([context.data.location.agent.sync(location), context.data.location.model.sync(location)])
-      if (results.some((result) => result.status === "rejected") && !refreshToasted) {
-        refreshToasted = true
-        context.ui.toast.show({ message: "Agent roster unavailable", variant: "warning" })
+      await Promise.allSettled(ids.map((id) => context.data.session.sync(id)))
+      if (syncRoster) {
+        const results = await Promise.allSettled([context.data.location.agent.sync(location), context.data.location.model.sync(location)])
+        if (results.some((result) => result.status === "rejected") && !refreshToasted) {
+          refreshToasted = true
+          context.ui.toast.show({ message: "Agent roster unavailable", variant: "warning" })
+        }
       }
       bump()
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined
     let refreshing = false
-    const scheduleRefresh = () => {
-      if (refreshing || timer !== undefined) return
-      timer = setTimeout(() => {
-        timer = undefined
-        refreshing = true
-        void refresh().finally(() => { refreshing = false })
-      }, 150)
+    let pending = false
+    const runRefresh = () => {
+      timer = undefined
+      refreshing = true
+      const syncRoster = pendingRoster
+      pendingRoster = false
+      pending = false
+      void refresh(syncRoster).finally(() => {
+        refreshing = false
+        if (pending) {
+          pending = false
+          timer = setTimeout(runRefresh, 250)
+        }
+      })
     }
+    const scheduleStructural = (type: string) => {
+      if (type === "agent.updated" || type === "model.updated") pendingRoster = true
+      if (refreshing) {
+        pending = true
+        return
+      }
+      if (timer === undefined) timer = setTimeout(runRefresh, 250)
+    }
+
+    const run = createMemo(() => running())
 
     const unregister = context.ui.slot({
       append: "sidebar.content",
       render: ({ sessionID }) => {
-        tick()
-        seen.add(sessionID)
-        setTodoAnimFor(sessionID)
-        const run = running(sessionID)
+        if (currentSession() !== sessionID) setCurrentSession(sessionID)
+        if (todoAnimFor() !== sessionID) setTodoAnimFor(sessionID)
         return (
           <box flexDirection="column" gap={0} width="100%">
             <Show when={settings.ui?.roster ?? true}>
-              {header(sessionID, "agents", "AGENTS & MODELS", () => (agents() ?? []).filter((agent) => !agent.hidden).length)}
+              {header(sessionID, "agents", "AGENTS & MODELS", () => visibleAgentCount())}
               <Show when={isOpen(sessionID, "agents")}>
-                <Show when={agents() !== undefined} fallback={<text fg={context.theme.text.faint} selectable={false}>roster unavailable</text>}>
+                <Show when={agentList() !== undefined} fallback={<text fg={context.theme.text.faint} selectable={false}>roster unavailable</text>}>
                   <box flexDirection="column" width="100%" gap={0}>
                     <box flexDirection="column" width="100%">
                       {header(sessionID, "primary", "PRIMARY", () => primary().length, true)}
@@ -711,10 +834,10 @@ export default Plugin.define({
                 </Show>
               </Show>
             </Show>
-            <Show when={run.length > 0 && (!(settings.ui?.roster ?? true) || isOpen(sessionID, "agents"))}>
+            <Show when={run().length > 0 && (!(settings.ui?.roster ?? true) || isOpen(sessionID, "agents"))}>
               <box flexDirection="column" width="100%" marginTop={1}>
-                <FlowingLabel text={`RUNNING (${run.length})`} animate={settings.animations.running} />
-                <For each={run}>{(session) => runningRow(session)}</For>
+                <FlowingLabel text={`RUNNING (${run().length})`} animate={settings.animations.running} />
+                <For each={run()}>{(session) => runningRow(session)}</For>
               </box>
             </Show>
             <Show when={(settings.ui?.todos ?? true) && todoItems(sessionID).length > 0}>
@@ -730,15 +853,19 @@ export default Plugin.define({
 
     const offListen = context.data.listen((event) => {
       const type = event.details.type
-      if (type.startsWith("session.") || type.startsWith("message.") || type === "agent.updated" || type === "model.updated") scheduleRefresh()
+      if (type === "session.metadata.updated" || type === "session.deleted") setMetadataVersion((n) => n + 1)
+      if (shouldRefreshSidebar(type)) scheduleStructural(type)
+      else if (isSidebarStatusEvent(type)) bump()
     })
 
     return () => {
+      if (pendingSteps.size > 0) flushSteps()
       unregister()
       offListen()
       disposed = true
       offSettings?.()
       if (timer !== undefined) clearTimeout(timer)
+      if (stepsTimer !== undefined) clearTimeout(stepsTimer)
       if (todoTimer !== undefined) clearInterval(todoTimer)
     }
   },

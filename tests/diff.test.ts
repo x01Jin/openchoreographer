@@ -1,6 +1,6 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { collapseEolOnlyChanges, summarizeChanges } from "../shared"
+import { collapseEolOnlyChanges, summarizeChanges, validateDiffInput } from "../shared"
 
 // A CRLF working tree over an LF blob makes unified diffs report every unchanged line as a -/+ pair that differs
 // only by the trailing CR. Each fixture below is a patch the way a provider would hand it back.
@@ -453,5 +453,13 @@ describe("summarizeChanges", () => {
       summarizeChanges([{ file: "scripts/build.ts", patch: 'execSync("git status")', additions: 1, deletions: 0 }]),
       "Risk: 1 files, +1 -0. Signals: shell (scripts/build.ts). Lenses: correctness, security.",
     )
+  })
+})
+
+describe("validateDiffInput stat", () => {
+  test("accepts stat true and coerces a non-boolean the way mode and context coerce", () => {
+    assert.equal(validateDiffInput({ stat: true }).stat, true)
+    assert.equal(validateDiffInput({ stat: "yes" }).stat, false)
+    assert.equal(validateDiffInput({}).stat, false)
   })
 })

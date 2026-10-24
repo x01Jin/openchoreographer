@@ -97,17 +97,6 @@ export function normalizeSnapshot(value: unknown): SettingsSnapshot | undefined 
   }
 }
 
-export function sameSteps(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
-  const aKeys = Object.keys(a)
-  const bKeys = Object.keys(b)
-  if (aKeys.length !== bKeys.length) return false
-  for (const key of aKeys) {
-    if (!Object.prototype.hasOwnProperty.call(b, key)) return false
-    if (b[key] !== a[key]) return false
-  }
-  return true
-}
-
 export function mergeSettings(
   current: ChoreographerSettings,
   patch: unknown,

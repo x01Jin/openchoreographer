@@ -1,6 +1,6 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normalizeSnapshot, sameSteps } from "../settings"
+import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normalizeSnapshot } from "../settings"
 
 describe("normalizeSettings", () => {
   test("defaults for undefined and null", () => {
@@ -205,16 +205,5 @@ describe("normalizeSnapshot", () => {
       defaults: { backend: 20, legacy: null },
       managed: ["backend"],
     })
-  })
-})
-
-describe("sameSteps", () => {
-  test("is true for the same entries in a different insertion order", () => {
-    assert.equal(sameSteps({ a: 1, b: 2 }, { b: 2, a: 1 }), true)
-  })
-
-  test("is false for a different value and a different key set", () => {
-    assert.equal(sameSteps({ a: 1 }, { a: 2 }), false)
-    assert.equal(sameSteps({ a: 1 }, { b: 1 }), false)
   })
 })

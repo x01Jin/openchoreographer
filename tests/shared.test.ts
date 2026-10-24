@@ -7,8 +7,11 @@ import {
   STEP_DEFAULTS,
   buildDelegationText,
   buildReviewBrief,
-  clipResult,
+  clipResultStats,
+  displayWidth,
+  isSidebarStatusEvent,
   normalizeOptions,
+  shouldRefreshSidebar,
   validateDiffInput,
   type Options,
 } from "../shared"
@@ -51,31 +54,31 @@ function longReport(): string {
   return ["TASK: keep the head", "FILES: a.ts added 1", ...middle, "BLOCKED: nothing", "RISK: keep the tail"].join("\n")
 }
 
-describe("clipResult", () => {
+describe("clipResultStats", () => {
   test("returns text at or under the limit unchanged", () => {
-    assert.equal(clipResult("hello"), "hello")
+    assert.equal(clipResultStats("hello").text, "hello")
     const exact = "a".repeat(MAX_RESULT_CHARS)
-    assert.equal(clipResult(exact), exact)
-    assert.equal(clipResult("🙂🙂"), "🙂🙂")
+    assert.equal(clipResultStats(exact).text, exact)
+    assert.equal(clipResultStats("🙂🙂").text, "🙂🙂")
   })
 
   test("clips one character over the limit and never exceeds the limit", () => {
     const text = "a".repeat(MAX_RESULT_CHARS + 1)
-    const out = clipResult(text)
+    const out = clipResultStats(text).text
     assert.ok(out.length <= MAX_RESULT_CHARS, `got ${out.length}`)
     assert.notEqual(out, text)
     assert.match(out, DROP_MARKER)
   })
 
   test("honours a custom limit", () => {
-    const out = clipResult("b".repeat(5_000), 500)
+    const out = clipResultStats("b".repeat(5_000), 500).text
     assert.ok(out.length <= 500, `got ${out.length}`)
   })
 
   test("keeps the first line at the head and the last line at the tail", () => {
     const text = longReport()
     assert.ok(text.length > MAX_RESULT_CHARS, `fixture is only ${text.length} chars`)
-    const out = clipResult(text)
+    const out = clipResultStats(text).text
     assert.ok(out.length <= MAX_RESULT_CHARS)
     assert.ok(out.startsWith("TASK: keep the head\n"), "head lost the TASK line")
     assert.ok(out.endsWith("\nRISK: keep the tail"), "tail lost the RISK line")
@@ -84,7 +87,7 @@ describe("clipResult", () => {
 
   test("the marker reports the exact number of dropped characters", () => {
     const text = longReport()
-    const out = clipResult(text)
+    const out = clipResultStats(text).text
     const matched = out.match(DROP_MARKER)
     assert.ok(matched !== null, "missing drop marker")
     const kept = out.length - matched[0].length
@@ -96,7 +99,7 @@ describe("clipResult", () => {
     const text = "🙂".repeat(3_000)
     assert.ok(text.length > MAX_RESULT_CHARS)
     for (const limit of [80, 81, 100, 101, 121, 122, 200, 201, 303, 404, 999, 1_000, 1_001, 3_999, MAX_RESULT_CHARS]) {
-      const out = clipResult(text, limit)
+      const out = clipResultStats(text, limit).text
       assert.ok(out.length <= limit, `limit ${limit}: got ${out.length}`)
       assert.deepEqual(loneSurrogates(out), [], `limit ${limit}`)
       const matched = out.match(DROP_MARKER)
@@ -110,7 +113,7 @@ describe("clipResult", () => {
   test("never splits a pair when the head budget collapses", () => {
     const text = "🙂".repeat(2_500)
     for (const limit of [0, 1, 2, 3, 5, 10, 40, 80]) {
-      const out = clipResult(text, limit)
+      const out = clipResultStats(text, limit).text
       assert.ok(out.length <= limit, `limit ${limit}: got ${out.length}`)
       assert.deepEqual(loneSurrogates(out), [], `limit ${limit}`)
     }
@@ -118,7 +121,7 @@ describe("clipResult", () => {
 
   test("a limit too small for the marker still returns within the limit", () => {
     for (const limit of [0, 1, 2, 5, 10, 40, 70]) {
-      const out = clipResult("x".repeat(5_000), limit)
+      const out = clipResultStats("x".repeat(5_000), limit).text
       assert.ok(out.length <= limit, `limit ${limit}: got ${out.length}`)
       // At these limits the marker cannot fit, so only plain head characters survive.
       assert.equal(out, "x".repeat(out.length))
@@ -126,7 +129,7 @@ describe("clipResult", () => {
   })
 
   test("a limit that fits only the marker still keeps head and tail inside the limit", () => {
-    const out = clipResult("x".repeat(5_000), 80)
+    const out = clipResultStats("x".repeat(5_000), 80).text
     assert.ok(out.length <= 80, `got ${out.length}`)
     assert.match(out, DROP_MARKER)
   })
@@ -134,8 +137,8 @@ describe("clipResult", () => {
 
 describe("validateDiffInput", () => {
   test("defaults mode to working and context to 3", () => {
-    assert.deepEqual(validateDiffInput({}), { mode: "working", base: undefined, context: 3, path: undefined })
-    assert.deepEqual(validateDiffInput(undefined), { mode: "working", base: undefined, context: 3, path: undefined })
+    assert.deepEqual(validateDiffInput({}), { mode: "working", base: undefined, context: 3, path: undefined, stat: false })
+    assert.deepEqual(validateDiffInput(undefined), { mode: "working", base: undefined, context: 3, path: undefined, stat: false })
   })
 
   test("keeps valid modes and rejects unknown ones", () => {
@@ -291,6 +294,57 @@ describe("buildDelegationText", () => {
   })
 })
 
+describe("shouldRefreshSidebar", () => {
+  test("ignores streaming delta and progress events", () => {
+    for (const type of [
+      "session.text.delta",
+      "session.reasoning.delta",
+      "session.tool.input.delta",
+      "session.tool.progress",
+      "session.step.streamed",
+      "session.compaction.delta",
+      "session.usage.updated",
+    ]) {
+      assert.equal(shouldRefreshSidebar(type), false, type)
+    }
+  })
+
+  test("refreshes on structural events", () => {
+    for (const type of ["session.created", "session.metadata.updated", "agent.updated", "model.updated"]) {
+      assert.equal(shouldRefreshSidebar(type), true, type)
+    }
+  })
+
+  test("status events bump the view without fetching", () => {
+    for (const type of ["session.status", "session.idle", "session.execution.started", "session.execution.succeeded"]) {
+      assert.equal(shouldRefreshSidebar(type), false, type)
+    }
+  })
+
+  test("an unknown type is false", () => {
+    assert.equal(shouldRefreshSidebar("session.synthetic"), false)
+    assert.equal(shouldRefreshSidebar("bogus.event"), false)
+  })
+})
+
+describe("isSidebarStatusEvent", () => {
+  test("excludes streaming deltas", () => {
+    assert.equal(isSidebarStatusEvent("session.compaction.delta"), false)
+    assert.equal(isSidebarStatusEvent("session.text.delta"), false)
+  })
+
+  test("includes explicit status events", () => {
+    assert.equal(isSidebarStatusEvent("session.compaction.started"), true)
+    assert.equal(isSidebarStatusEvent("session.execution.succeeded"), true)
+    assert.equal(isSidebarStatusEvent("session.status"), true)
+  })
+
+  test("an unknown type is false", () => {
+    assert.equal(isSidebarStatusEvent("session.synthetic"), false)
+    assert.equal(isSidebarStatusEvent("bogus.event"), false)
+  })
+})
+
 describe("STEP_DEFAULTS", () => {
   test("covers every managed agent with an integer inside the settings range", () => {
     for (const id of AGENT_IDS) {
@@ -299,5 +353,33 @@ describe("STEP_DEFAULTS", () => {
       assert.ok(Number.isInteger(budget), `non-integer default for ${id}`)
       assert.ok(budget >= STEPS_MIN && budget <= STEPS_MAX, `default for ${id} outside ${STEPS_MIN}..${STEPS_MAX}`)
     }
+  })
+})
+
+describe("displayWidth", () => {
+  test("ascii equals length", () => {
+    assert.equal(displayWidth("hello"), 5)
+    assert.equal(displayWidth(""), 0)
+  })
+
+  test("cjk counts two per character", () => {
+    assert.equal(displayWidth("日本語"), 6)
+  })
+
+  test("mixed ascii and cjk adds up", () => {
+    assert.equal(displayWidth("漢a"), 3)
+    assert.equal(displayWidth("a漢b"), 4)
+  })
+
+  test("emoji counts two", () => {
+    assert.equal(displayWidth("🙂"), 2)
+  })
+
+  test("combining mark does not add a cell", () => {
+    assert.equal(displayWidth("é"), 1)
+  })
+
+  test("a string mixing ascii and cjk adds up", () => {
+    assert.equal(displayWidth("hi日本"), 6)
   })
 })

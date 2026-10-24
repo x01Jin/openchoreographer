@@ -107,6 +107,65 @@ export function createBreaker(options: BreakerOptions): Breaker {
 
 export type Selection = { readonly model: ParsedModel | undefined; readonly primary: ParsedModel | undefined; readonly fellBack: boolean }
 
+export function resultText(value: unknown): string {
+  if (typeof value !== "object" || value === null) return ""
+  const content = (value as { content?: unknown }).content
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    let text = ""
+    for (const entry of content) {
+      if (typeof entry !== "object" || entry === null) continue
+      const record = entry as { type?: unknown; text?: unknown }
+      if (record.type === "text" && typeof record.text === "string") text += record.text
+    }
+    return text
+  }
+  return ""
+}
+
+export function isChildQuotaFailure(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false
+  const text = resultText(value)
+  if (!isQuotaError({ message: text })) return false
+  const metadata = (value as { metadata?: unknown }).metadata
+  if (typeof metadata === "object" && metadata !== null) {
+    const state = (metadata as { state?: unknown }).state
+    if (state === "error" || state === "failed") return true
+    if (state !== undefined) return false
+  }
+  return text.includes('state="error"') || text.includes('state="failed"')
+}
+
+export type ResultPlan =
+  | { readonly kind: "return"; readonly credit?: ParsedModel }
+  | { readonly kind: "retry"; readonly fail?: ParsedModel; readonly model: ParsedModel }
+
+export function planResultFallback(input: {
+  readonly result: unknown
+  readonly actual: ParsedModel | undefined
+  readonly alternates: readonly ParsedModel[]
+  readonly available: (model: ParsedModel) => boolean
+  readonly aborted: boolean
+}): ResultPlan {
+  if (input.aborted) return { kind: "return" }
+  if (!isChildQuotaFailure(input.result)) {
+    return input.actual === undefined ? { kind: "return" } : { kind: "return", credit: input.actual }
+  }
+  const candidates =
+    input.actual === undefined ? [...input.alternates] : input.alternates.filter((m) => m.key !== input.actual?.key)
+  if (candidates.length === 0) return { kind: "return" }
+  const chosen = candidates.find((m) => input.available(m)) ?? candidates[candidates.length - 1]
+  return input.actual === undefined ? { kind: "retry", model: chosen } : { kind: "retry", fail: input.actual, model: chosen }
+}
+
+export function planRetriedResult(input: { readonly result: unknown; readonly alternate: ParsedModel }): {
+  readonly credit?: ParsedModel
+  readonly fail?: ParsedModel
+} {
+  if (isChildQuotaFailure(input.result)) return { fail: input.alternate }
+  return { credit: input.alternate }
+}
+
 export function chooseModel(input: {
   readonly primary: ParsedModel | undefined
   readonly alternates: readonly ParsedModel[]

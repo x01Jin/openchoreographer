@@ -8,7 +8,6 @@ import {
   MAX_DIFF_CHARS,
   REVIEWER_IDS,
   STEP_DEFAULTS,
-  STRICT_REVIEW_PROTOCOL,
   WORKER_IDS,
   buildDelegationText,
   buildReviewBrief,
@@ -23,7 +22,7 @@ import {
   type Options,
   type ValidatedDiffInput,
 } from "./shared"
-import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "./fallback"
+import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult, type ParsedModel } from "./fallback"
 import { ChoreographerRpc } from "./rpc"
 import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type SettingsSnapshot } from "./settings"
 
@@ -43,7 +42,7 @@ async function resolvePrimary(ctx: Plugin.Context, agent: string): Promise<Parse
   if (cached !== undefined && now - cached.at < PRIMARY_TTL_MS) return cached.model
   // .then also catches a synchronous throw from the client method, which .catch on the call result would miss.
   const listed = await Promise.resolve()
-    .then(() => ctx.agent.list({}))
+    .then(() => ctx.agent.list({ location: ctx.location }))
     .catch(() => undefined)
   const found = listed?.data.find((a) => a.id === agent)
   const model =
@@ -60,13 +59,32 @@ function treeKey(entry: TreeEntry): string {
   return entry.file + ":" + entry.status
 }
 
-async function readTree(ctx: Plugin.Context): Promise<readonly TreeEntry[] | undefined> {
-  try {
-    const { data } = await ctx.vcs.status()
-    return data
-  } catch {
-    return undefined
+const TREE_CACHE_MS = 1000
+const treeCache = new Map<string, { at: number; promise: Promise<readonly TreeEntry[] | undefined> }>()
+
+// The baseline read is shared per location for 1000 ms so parallel spawns reuse one in-flight or settled VCS call,
+// failures included. Trade-off: a change made within the window before a spawn is treated as pre-existing
+// by the retry gate.
+async function readTree(ctx: Plugin.Context, fresh = false): Promise<readonly TreeEntry[] | undefined> {
+  const now = Date.now()
+  for (const [key, entry] of treeCache) {
+    if (now - entry.at >= TREE_CACHE_MS) treeCache.delete(key)
   }
+  const dir = ctx.location.directory
+  if (!fresh) {
+    const cached = treeCache.get(dir)
+    if (cached !== undefined) return cached.promise
+  }
+  const pending = (async (): Promise<readonly TreeEntry[] | undefined> => {
+    try {
+      const { data } = await ctx.vcs.status()
+      return data
+    } catch {
+      return undefined
+    }
+  })()
+  treeCache.set(dir, { at: now, promise: pending })
+  return pending
 }
 
 function changedFiles(baseline: ReadonlySet<string>, current: readonly TreeEntry[]): string[] {
@@ -443,7 +461,44 @@ export default Plugin.define({
                   if (tree !== undefined) baseline = new Set(tree.map(treeKey))
                 }
                 const result = await original(input, context)
-                if (used !== undefined) breaker.succeed(used, startedAt)
+                const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
+                const plan = planResultFallback({
+                  result,
+                  actual,
+                  alternates: agent !== undefined ? (options.fallback[agent] ?? []) : [],
+                  available: (m) => breaker.available(m),
+                  aborted: context.signal.aborted,
+                })
+                if (plan.kind === "return") {
+                  if (plan.credit !== undefined) breaker.succeed(plan.credit, startedAt)
+                  else if (actual !== undefined && isChildQuotaFailure(result)) breaker.fail(actual)
+                  return result
+                }
+                if (agent !== undefined) {
+                  const alternates = options.fallback[agent] ?? []
+                  if (alternates.length > 0) {
+                    if (plan.fail !== undefined) breaker.fail(plan.fail)
+                    const alternate = plan.model
+                    if (baseline !== undefined) {
+                      const current = await readTree(ctx, true)
+                      if (current !== undefined) {
+                        const changed = changedFiles(baseline, current)
+                        if (changed.length > 0) return result
+                      }
+                    }
+                    const next = alternate.key + (alternate.variant ? "#" + alternate.variant : "")
+                    try {
+                      const retried = await original({ ...fields, model: next }, context)
+                      const settled = planRetriedResult({ result: retried, alternate })
+                      if (settled.fail !== undefined) breaker.fail(settled.fail)
+                      if (settled.credit !== undefined) breaker.succeed(settled.credit, startedAt)
+                      return retried
+                    } catch (retryError) {
+                      breaker.fail(alternate)
+                      throw retryError
+                    }
+                  }
+                }
                 return result
               } catch (error) {
                 // A cancelled child is not a provider failure; retrying would ignore the abort.
@@ -452,16 +507,18 @@ export default Plugin.define({
                 if (/abort|cancel/i.test(message)) throw error
                 if (agent === undefined) throw error
                 const alternates = options.fallback[agent] ?? []
-                if (used === undefined || alternates === undefined || alternates.length === 0) throw error
-                if (!isQuotaError({ message }) && breaker.available(used)) throw error
-                breaker.fail(used)
-                const choice = chooseModel({ primary: used, alternates, available: (m) => breaker.available(m) })
+                const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
+                const failed = actual ?? used
+                if (failed === undefined || alternates === undefined || alternates.length === 0) throw error
+                if (!isQuotaError({ message }) && breaker.available(failed)) throw error
+                breaker.fail(failed)
+                const choice = chooseModel({ primary: failed, alternates, available: (m) => breaker.available(m) })
                 if (!choice.fellBack || choice.model === undefined) throw error
                 // Never resend the model that just failed, and never route to an exhausted one.
-                if (choice.model.key === used.key || !breaker.available(choice.model)) throw error
+                if (choice.model.key === failed.key || !breaker.available(choice.model)) throw error
                 // Do not pay twice for a failed spawn; a tree we could not read either time retries exactly as before.
                 if (baseline !== undefined) {
-                  const current = await readTree(ctx)
+                  const current = await readTree(ctx, true)
                   if (current !== undefined) {
                     const changed = changedFiles(baseline, current)
                     if (changed.length > 0) throw changedTreeError(error, changed)
@@ -483,7 +540,7 @@ export default Plugin.define({
         }),
       )
 
-      const listed = await ctx.agent.list({}).catch(() => undefined)
+      const listed = await ctx.agent.list({ location: ctx.location }).catch(() => undefined)
       if (listed) {
         const ids = listed.data.map((agent) => agent.id)
         const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id)) : []
@@ -507,7 +564,7 @@ export default Plugin.define({
         await ctx.tool.transform((editor) => {
           editor.add({
             name: "diff",
-            description: "Read the current changes; mode working is uncommitted, branch is against the merge base, committed is the last commit; output is per-file with status and counts.",
+            description: "Read the current changes; mode working is uncommitted, branch is against the merge base, committed is the last commit; output is per-file with status and counts, or pass stat: true for counts-only lines without patches.",
             input: {
               type: "object",
               properties: {
@@ -515,24 +572,27 @@ export default Plugin.define({
                 base: { type: "string" },
                 context: { type: "integer", minimum: 0, maximum: 10 },
                 path: { type: "string" },
+                stat: { type: "boolean" },
               },
               additionalProperties: false,
             },
             options: { permission: "read" },
             execute: async (input) => {
               let mode: ValidatedDiffInput["mode"] = "working"
+              let stat = false
               try {
                 const validated = validateDiffInput(input)
                 mode = validated.mode
+                stat = validated.stat
                 const { base, context, path } = validated
                 const { data } = await ctx.vcs.diff({ mode, base, context })
                 const needle = path
                 const scoped = needle ? data.filter((entry) => entry.file.includes(needle)) : data
                 if (scoped.length === 0) {
                   if (needle && data.length > 0) {
-                    return { content: `No files match path "${needle}". ${data.length} files changed in mode ${mode}.`, metadata: { files: 0, mode } }
+                    return { content: `No files match path "${needle}". ${data.length} files changed in mode ${mode}.`, metadata: { files: 0, mode, ...(stat ? { stat: true as const } : {}) } }
                   }
-                  return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode } }
+                  return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode, ...(stat ? { stat: true as const } : {}) } }
                 }
                 // A CRLF working tree over LF blobs turns every modified file into a whole-file rewrite; collapse those
                 // pairs first so the summary, the counts, and the 60k budget all describe what actually changed.
@@ -541,7 +601,7 @@ export default Plugin.define({
                   return collapsed === undefined ? [] : [{ entry, collapsed }]
                 })
                 if (changed.length === 0) {
-                  return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode } }
+                  return { content: base ? `No changes in mode ${mode} against ${base}.` : `No changes in mode ${mode}.`, metadata: { files: 0, mode, ...(stat ? { stat: true as const } : {}) } }
                 }
                 const header = summarizeChanges(
                   changed.map(({ entry, collapsed }) => ({
@@ -551,14 +611,22 @@ export default Plugin.define({
                     deletions: collapsed.deletions,
                   })),
                 )
-                const blocks = [
-                  header,
-                  ...changed.map(({ entry, collapsed }) => {
-                  const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
-                  const patch = collapsed.patch.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
-                  return `${file} (${entry.status} +${collapsed.additions} -${collapsed.deletions})\n${patch}`
-                  }),
-                ]
+                const blocks = stat
+                  ? [
+                      header,
+                      ...changed.map(({ entry, collapsed }) => {
+                        const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+                        return `${entry.status} ${file} +${collapsed.additions} -${collapsed.deletions}`
+                      }),
+                    ]
+                  : [
+                      header,
+                      ...changed.map(({ entry, collapsed }) => {
+                      const file = entry.file.replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+                      const patch = collapsed.patch.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "")
+                      return `${file} (${entry.status} +${collapsed.additions} -${collapsed.deletions})\n${patch}`
+                      }),
+                    ]
                 const total = blocks.reduce((sum, block) => sum + block.length, 0) + (blocks.length > 1 ? (blocks.length - 1) * 2 : 0)
                 const kept: string[] = []
                 let keptLength = 0
@@ -577,12 +645,12 @@ export default Plugin.define({
                   }
                   const shown = cut
                   text = text.slice(0, cut) + `\n… truncated at 60000 chars (showing ${shown} of ${total}); pass path to narrow, or base to compare against another ref`
-                  return { content: text, metadata: { files: changed.length, mode, truncated: true, total } }
+                  return { content: text, metadata: { files: changed.length, mode, truncated: true, total, ...(stat ? { stat: true as const } : {}) } }
                 }
-                return { content: text, metadata: { files: changed.length, mode } }
+                return { content: text, metadata: { files: changed.length, mode, ...(stat ? { stat: true as const } : {}) } }
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error)
-                return { content: `diff unavailable: ${message}`, metadata: { files: 0, mode, error: true } }
+                return { content: `diff unavailable: ${message}`, metadata: { files: 0, mode, error: true, ...(stat ? { stat: true as const } : {}) } }
               }
             },
           })
@@ -620,7 +688,6 @@ export default Plugin.define({
               return { content: JSON.stringify(rows) }
             },
           })
-          console.log("[openchoreographer] registered todowrite and todoread")
         }),
       )
 
@@ -698,12 +765,9 @@ export default Plugin.define({
             event.system.push({
               type: "text",
               text: `TODO discipline:
-- Write the list before the first tool call.
-- Update it AT EVERY STEP TRANSITION: in one write, mark the finished step completed and the next step in_progress.
-- Never batch updates to the end of the task; a list written once and reconciled at the end is not a ledger.
-- If a new step appears mid-task, add it in that same write.
-- One item per verifiable action, phrased as the action, not the goal.
-- Never end a turn with an item still in_progress or pending unless blocked; say what blocks it.`,
+- Write the list before the first tool call; each item is one verifiable action phrased as the action.
+- At each step transition, in one write mark the finished item completed and the next in_progress, adding a mid-task step there too; never batch completions to the end.
+- Never end a turn with an item pending or in_progress unless blocked, and say what blocks it.`,
             })
             delete event.tools.edit
             delete event.tools.write
@@ -719,7 +783,6 @@ export default Plugin.define({
             delete event.tools.shell
             delete event.tools.subagent
             delete event.tools.question
-            event.system.push({ type: "text", text: STRICT_REVIEW_PROTOCOL })
             return
           }
           if (isWorker(event.agent)) {

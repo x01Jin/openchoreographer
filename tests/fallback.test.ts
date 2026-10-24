@@ -1,6 +1,6 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { chooseModel, createBreaker, isQuotaError, parseModel, type ParsedModel } from "../fallback"
+import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult, resultText, type ParsedModel } from "../fallback"
 
 function model(id: string): ParsedModel {
   const parsed = parseModel(id)
@@ -277,5 +277,175 @@ describe("chooseModel", () => {
       chooseModel({ primary: undefined, alternates: [first], available: () => true }),
       { model: undefined, primary: undefined, fellBack: false },
     )
+  })
+})
+
+describe("resultText", () => {
+  test("returns a string content itself", () => {
+    assert.equal(resultText({ content: "hello" }), "hello")
+  })
+
+  test("concatenates text-part array entries", () => {
+    assert.equal(
+      resultText({ content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }),
+      "ab",
+    )
+  })
+
+  test("skips mixed parts without text", () => {
+    assert.equal(
+      resultText({ content: [{ type: "text", text: "a" }, { type: "image", text: "b" }, { type: "text", text: 42 }] }),
+      "a",
+    )
+  })
+
+  test("returns empty for invalid shapes", () => {
+    assert.equal(resultText(undefined), "")
+    assert.equal(resultText(null), "")
+    assert.equal(resultText({}), "")
+    assert.equal(resultText({ content: 42 }), "")
+    assert.equal(resultText({ content: [{ type: "text" }] }), "")
+  })
+})
+
+describe("isChildQuotaFailure", () => {
+  const observed = "Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go"
+
+  test("quota text with error state is true", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded", metadata: { state: "error" } }), true)
+  })
+
+  test("the same text without metadata is false", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded" }), false)
+  })
+
+  test("quota text with completed state is false", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded", metadata: { state: "completed" } }), false)
+  })
+
+  test("a non-quota error state is false", () => {
+    assert.equal(isChildQuotaFailure({ content: "model not found", metadata: { state: "error" } }), false)
+  })
+
+  test("the exact observed message is true", () => {
+    assert.equal(isChildQuotaFailure({ content: observed, metadata: { state: "error" } }), true)
+  })
+
+  test("quota text with failed state is true", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded", metadata: { state: "failed" } }), true)
+  })
+
+  test("quota text with error state is true", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded", metadata: { state: "error" } }), true)
+  })
+
+  test("absent state with the subagent error tag is true", () => {
+    assert.equal(
+      isChildQuotaFailure({ content: '<subagent agent="explore" state="error">rate limit exceeded</subagent>' }),
+      true,
+    )
+  })
+
+  test("absent state without the tag is false", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded" }), false)
+  })
+
+  test("a quota phrase with succeeded state is false", () => {
+    assert.equal(isChildQuotaFailure({ content: "rate limit exceeded", metadata: { state: "succeeded" } }), false)
+  })
+})
+
+describe("planResultFallback", () => {
+  const quota = { content: "rate limit exceeded", metadata: { state: "error" } }
+  const ok = { content: "done", metadata: { state: "completed" } }
+
+  test("success result credits the actual model", () => {
+    const actual = model("p/primary")
+    assert.deepEqual(
+      planResultFallback({ result: ok, actual, alternates: [model("p/alt")], available: () => true, aborted: false }),
+      { kind: "return", credit: actual },
+    )
+  })
+
+  test("quota result with a known actual retries the alternate and fails the actual", () => {
+    const actual = model("p/primary")
+    const alternate = model("p/alt")
+    assert.deepEqual(
+      planResultFallback({ result: quota, actual, alternates: [alternate], available: () => true, aborted: false }),
+      { kind: "retry", fail: actual, model: alternate },
+    )
+  })
+
+  test("an actual listed as an alternate is excluded", () => {
+    const actual = model("p/primary")
+    const alternate = model("p/alt")
+    const plan = planResultFallback({
+      result: quota,
+      actual,
+      alternates: [actual, alternate],
+      available: () => true,
+      aborted: false,
+    })
+    assert.equal(plan.kind, "retry")
+    if (plan.kind === "retry") {
+      assert.equal(plan.model.key, alternate.key)
+      assert.notEqual(plan.model.key, actual.key)
+    }
+  })
+
+  test("every alternate is the actual, so no retry", () => {
+    const actual = model("p/primary")
+    const plan = planResultFallback({
+      result: quota,
+      actual,
+      alternates: [model("p/primary")],
+      available: () => true,
+      aborted: false,
+    })
+    assert.deepEqual(plan, { kind: "return" })
+  })
+
+  test("aborted quota returns with no credit", () => {
+    const plan = planResultFallback({
+      result: quota,
+      actual: model("p/primary"),
+      alternates: [model("p/alt")],
+      available: () => true,
+      aborted: true,
+    })
+    assert.deepEqual(plan, { kind: "return" })
+  })
+
+  test("unknown actual retries the first available alternate with no fail entry", () => {
+    const first = model("p/first")
+    const second = model("p/second")
+    const plan = planResultFallback({
+      result: quota,
+      actual: undefined,
+      alternates: [first, second],
+      available: () => true,
+      aborted: false,
+    })
+    assert.deepEqual(plan, { kind: "retry", model: first })
+  })
+})
+
+describe("planRetriedResult", () => {
+  test("alternate also returns quota yields fail and no credit", () => {
+    const alternate = model("p/alt")
+    const settled = planRetriedResult({
+      result: { content: "rate limit exceeded", metadata: { state: "error" } },
+      alternate,
+    })
+    assert.deepEqual(settled, { fail: alternate })
+  })
+
+  test("alternate succeeds yields credit", () => {
+    const alternate = model("p/alt")
+    const settled = planRetriedResult({
+      result: { content: "done", metadata: { state: "completed" } },
+      alternate,
+    })
+    assert.deepEqual(settled, { credit: alternate })
   })
 })
