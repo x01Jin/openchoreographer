@@ -34,11 +34,11 @@ function isErrnoCode(err, code) {
 }
 
 /**
- * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
+ * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, resetSteps: boolean, help: boolean, version: boolean }} InstallOpts
  * @typedef {"installed" | "overwrote" | "same" | "stale" | "skipped"} CopyStatus
- * @typedef {{ force: boolean, dryRun: boolean }} CopyOptions
+ * @typedef {{ force: boolean, dryRun: boolean, preserveSteps?: boolean, resetSteps?: boolean }} CopyOptions
  * @typedef {{ installed: number, overwrote: number, same: number, stale: number, skipped: number }} CopyCounts
- * @typedef {{ src: string, dest: string, group: "agents" | "plugin" }} CopyPlan
+ * @typedef {{ src: string, dest: string, group: "agents" | "plugin", preserveSteps?: boolean }} CopyPlan
  */
 
 /** @returns {CopyCounts} */
@@ -55,6 +55,7 @@ Options:
   --local      Copy plugin files into the global plugins dir, then install agents globally
   --project    Install into the current working directory (.opencode/); implies local plugin copy
   --force      Overwrite existing files that differ
+  --reset-steps  reset bundled step budgets on overwrite (requires --force)
   --prune      Delete retired agent files in the target directory (requires --force)
   --dry-run    Print planned paths and actions; write nothing
   --no-agents  Skip agent installation
@@ -82,7 +83,7 @@ Examples:
  */
 function parseArgs(argv) {
   /** @type {InstallOpts} */
-  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, noPlugin: false, prune: false, help: false, version: false };
+  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, noPlugin: false, prune: false, resetSteps: false, help: false, version: false };
   /** @type {string[]} */
   const unknown = [];
   let args = argv;
@@ -98,6 +99,7 @@ function parseArgs(argv) {
     else if (arg === "--no-deps") opts.noDeps = true;
     else if (arg === "--no-plugin") opts.noPlugin = true;
     else if (arg === "--prune") opts.prune = true;
+    else if (arg === "--reset-steps") opts.resetSteps = true;
     else if (arg === "--version") opts.version = true;
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else unknown.push(arg);
@@ -155,13 +157,62 @@ function findSymlinkInPath(dest) {
  * @param {boolean} dryRun
  * @param {CopyStatus} status
  * @param {string} dest
+ * @param {string} [extra] appended suffix, e.g. " (steps kept)"
  * @returns {void}
  */
-function printAction(dryRun, status, dest) {
+function printAction(dryRun, status, dest, extra) {
   const prefix = dryRun ? "[dry-run] " : "";
   const tag = `${status}:`.padEnd(10);
   const suffix = status === "stale" ? " (use --force)" : "";
-  console.log(`${prefix}${tag} ${dest}${suffix}`);
+  console.log(`${prefix}${tag} ${dest}${suffix}${extra ?? ""}`);
+}
+
+/**
+ * Locate YAML frontmatter: an opening `---` line at the very start of the
+ * file and the next line that is exactly `---` (optional trailing spaces/CR).
+ * @param {string} text file content
+ * @returns {{ openEnd: number, closeStart: number, closeEnd: number } | null} fence offsets, or null when incomplete
+ */
+function frontmatterBounds(text) {
+  const open = text.match(/^---[ \t]*\r?\n/);
+  if (open === null) {
+    return null;
+  }
+  const openEnd = open[0].length;
+  const close = text.slice(openEnd).match(/^---[ \t]*\r?(\n|$)/m);
+  if (close === null || close.index === undefined) {
+    return null;
+  }
+  const closeStart = openEnd + close.index;
+  return { openEnd, closeStart, closeEnd: closeStart + close[0].length };
+}
+
+/**
+ * Merge a destination-tuned step budget into fresh source bytes.
+ * Only the YAML frontmatter counts: a `steps:` line in the body is ignored.
+ * @param {Buffer} srcBuf bundled source content
+ * @param {Buffer} destBuf installed destination content
+ * @returns {Buffer | null} merged content, or null when either file has no complete frontmatter or the destination has no step value to keep
+ */
+function mergeAgentSteps(srcBuf, destBuf) {
+  const srcText = srcBuf.toString("utf8");
+  const destText = destBuf.toString("utf8");
+  const srcFm = frontmatterBounds(srcText);
+  const destFm = frontmatterBounds(destText);
+  if (srcFm === null || destFm === null) {
+    return null;
+  }
+  const destValue = destText.slice(destFm.openEnd, destFm.closeStart).match(/^steps:[ \t]*["']?(-?\d+)/m);
+  if (destValue === null) {
+    return null;
+  }
+  const srcFmBody = srcText.slice(srcFm.openEnd, srcFm.closeStart);
+  if (/^steps:[ \t]*["']?-?\d+.*/m.test(srcFmBody)) {
+    const mergedFmBody = srcFmBody.replace(/^steps:[ \t]*["']?-?\d+.*/m, `steps: ${destValue[1]}`);
+    return Buffer.from(`${srcText.slice(0, srcFm.openEnd)}${mergedFmBody}${srcText.slice(srcFm.closeStart)}`, "utf8");
+  }
+  const eol = srcText.includes("\r\n") ? "\r\n" : "\n";
+  return Buffer.from(`${srcText.slice(0, srcFm.openEnd)}steps: ${destValue[1]}${eol}${srcText.slice(srcFm.openEnd)}`, "utf8");
 }
 
 /**
@@ -200,17 +251,30 @@ function copyOne(src, dest, opts) {
     }
     return "installed";
   }
-  if (destSize === srcBuf.length) {
-    const destBuf = fs.readFileSync(dest);
-    if (srcBuf.equals(destBuf)) {
-      printAction(opts.dryRun, "same", dest);
-      return "same";
+  const destBuf = fs.readFileSync(dest);
+  if (srcBuf.equals(destBuf)) {
+    printAction(opts.dryRun, "same", dest);
+    return "same";
+  }
+  /** @type {Buffer} */
+  let writeBuf = srcBuf;
+  let stepsKept = false;
+  if (opts.preserveSteps === true && opts.resetSteps !== true) {
+    const merged = mergeAgentSteps(srcBuf, destBuf);
+    if (merged !== null) {
+      if (merged.equals(destBuf)) {
+        printAction(opts.dryRun, "same", dest, " (steps kept)");
+        return "same";
+      }
+      writeBuf = merged;
+      stepsKept = !merged.equals(srcBuf);
     }
   }
+  const keptSuffix = stepsKept ? " (steps kept)" : "";
   if (opts.force) {
-    printAction(opts.dryRun, "overwrote", dest);
+    printAction(opts.dryRun, "overwrote", dest, keptSuffix);
     if (!opts.dryRun) {
-      fs.copyFileSync(src, dest);
+      fs.writeFileSync(dest, writeBuf);
     }
     return "overwrote";
   }
@@ -319,6 +383,11 @@ function main() {
     process.exitCode = 1;
     return;
   }
+  if (opts.resetSteps && !opts.force) {
+    console.error("--reset-steps requires --force");
+    process.exitCode = 1;
+    return;
+  }
 
   const isProject = opts.project;
   const copyPlugin = (opts.local || opts.project) && !opts.noPlugin;
@@ -385,7 +454,7 @@ function main() {
   const plan = [];
   if (!opts.noAgents) {
     for (const file of agentSources) {
-      plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(agentsTarget, file), group: "agents" });
+      plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(agentsTarget, file), group: "agents", preserveSteps: true });
     }
   }
   if (copyPlugin) {
@@ -395,7 +464,7 @@ function main() {
     plan.push({ src: path.join(packageRoot, "bin", "install.mjs"), dest: path.join(pluginBinDir, "install.mjs"), group: "plugin" });
     if (!opts.noAgents) {
       for (const file of agentSources) {
-        plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(pluginAgentsDir, file), group: "plugin" });
+        plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(pluginAgentsDir, file), group: "plugin", preserveSteps: true });
       }
     }
   }
@@ -472,12 +541,12 @@ function main() {
   const agentCounts = emptyCounts();
   const pluginCounts = emptyCounts();
   /** @type {CopyOptions} */
-  const copyOpts = { force: opts.force, dryRun: opts.dryRun };
+  const copyOpts = { force: opts.force, dryRun: opts.dryRun, resetSteps: opts.resetSteps };
   for (const entry of plan) {
     /** @type {CopyStatus} */
     let status;
     try {
-      status = copyOne(entry.src, entry.dest, copyOpts);
+      status = copyOne(entry.src, entry.dest, { ...copyOpts, preserveSteps: entry.preserveSteps });
     } catch (err) {
       console.error(`Failed to copy ${entry.src} -> ${entry.dest}\n${errorMessage(err)}`);
       process.exitCode = 1;
