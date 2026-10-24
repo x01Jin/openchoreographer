@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_DIR_NAME = "openchoreographer";
-const PLUGIN_FILES = ["index.ts", "tui.tsx", "shared.ts", "fallback.ts", "rpc.ts", "settings.ts", "package.json", "README.md", "LICENSE"];
+const PLUGIN_ROOT_FILES = ["index.ts", "tui.tsx", "package.json", "README.md", "LICENSE"];
 const RETIRED_AGENT_FILES = [
   "reviewer-general.md",
   "reviewer-oop.md",
@@ -354,6 +354,65 @@ function pruneRetiredFiles(dir, dryRun) {
   return { pruned, errors };
 }
 
+/**
+ * Recursively collect the `.ts`/`.tsx` files under the package `src/` directory.
+ * Anything else (symlinks, sockets, or other non-regular entries) is refused
+ * loudly so nothing is ever skipped silently.
+ * @param {string} srcDir absolute path of the package `src/` directory
+ * @returns {string[]} paths relative to `srcDir` (e.g. `server/fallback.ts`), sorted
+ */
+function collectSrcFiles(srcDir) {
+  /** @type {import("node:fs").Stats | null} */
+  let dirStat = null;
+  try {
+    dirStat = fs.lstatSync(srcDir);
+  } catch (err) {
+    throw new Error(`Package src/ directory missing: ${srcDir}\n${errorMessage(err)}`);
+  }
+  if (dirStat === null || dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+    throw new Error(`Package src/ entry is not a regular directory: ${srcDir}`);
+  }
+  /** @type {string[]} */
+  const found = [];
+  /**
+   * @param {string} dir
+   * @returns {void}
+   */
+  function walk(dir) {
+    /** @type {import("node:fs").Dirent[]} */
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      /** @type {import("node:fs").Stats} */
+      let st;
+      try {
+        st = fs.lstatSync(full);
+      } catch (err) {
+        throw new Error(`Failed to inspect source entry: ${full}\n${errorMessage(err)}`);
+      }
+      if (st.isSymbolicLink()) {
+        throw new Error(`Source entry is a symlink: ${full}`);
+      }
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (st.isFile()) {
+        if (/\.tsx?$/.test(entry.name)) {
+          found.push(path.relative(srcDir, full));
+        }
+      } else {
+        throw new Error(`Source entry is not a regular file: ${full}`);
+      }
+    }
+  }
+  walk(srcDir);
+  if (found.length === 0) {
+    throw new Error(`No .ts/.tsx files found in package src/ directory: ${srcDir}`);
+  }
+  found.sort();
+  return found;
+}
+
 function main() {
   const { opts, unknown } = parseArgs(process.argv.slice(2));
   if (unknown.length > 0) {
@@ -458,8 +517,20 @@ function main() {
     }
   }
   if (copyPlugin) {
-    for (const file of PLUGIN_FILES) {
+    /** @type {string[]} */
+    let srcFiles = [];
+    try {
+      srcFiles = collectSrcFiles(path.join(packageRoot, "src"));
+    } catch (err) {
+      console.error(`Failed to collect src/ files\n${errorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    for (const file of PLUGIN_ROOT_FILES) {
       plan.push({ src: path.join(packageRoot, file), dest: path.join(pluginTarget, file), group: "plugin" });
+    }
+    for (const rel of srcFiles) {
+      plan.push({ src: path.join(packageRoot, "src", rel), dest: path.join(pluginTarget, "src", rel), group: "plugin" });
     }
     plan.push({ src: path.join(packageRoot, "bin", "install.mjs"), dest: path.join(pluginBinDir, "install.mjs"), group: "plugin" });
     if (!opts.noAgents) {
@@ -522,6 +593,20 @@ function main() {
     if (!opts.noAgents) {
       dirsToMake.push(pluginAgentsDir);
     }
+    // Nested src/ destinations need their own parents; mkdir -p covers the rest.
+    /** @type {string[]} */
+    const nestedDirs = [];
+    for (const entry of plan) {
+      if (entry.group !== "plugin") {
+        continue;
+      }
+      const parent = path.dirname(entry.dest);
+      if (!dirsToMake.includes(parent) && !nestedDirs.includes(parent)) {
+        nestedDirs.push(parent);
+      }
+    }
+    nestedDirs.sort();
+    dirsToMake.push(...nestedDirs);
   }
   for (const dir of dirsToMake) {
     if (opts.dryRun) {

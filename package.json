@@ -21,12 +21,9 @@
   "files": [
     "index.ts",
     "tui.tsx",
-    "shared.ts",
-    "fallback.ts",
-    "rpc.ts",
-    "settings.ts",
     "agents",
     "bin",
+    "src",
     "README.md",
     "LICENSE"
   ],

@@ -57,7 +57,7 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 | `reviewer` | subagent | 40 | strict read-only review through one lens | `diff`, read only |
 | `reviewer-security` | subagent | 35 | strict read-only security review | `diff`, read only |
 
-The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected as one `id — label: hint` line per lens, not copied into the agent files.
+The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `src/shared/review.ts` and is injected as one `id — label: hint` line per lens, not copied into the agent files.
 
 The orchestrator runs `designer` before `frontend` when a task changes a flow, state, empty/error case, or copy, pasting its states and copy into the frontend prompt. It runs `writer` after behavior and interface settle, and `writer` reports `BLOCKED` when docs need a code change.
 
@@ -157,7 +157,7 @@ Agents without a `fallback` entry are never touched, and the orchestrator is nev
 
 Arrow keys move, left and right change a step budget by 5, enter toggles an animation or a switch, `r` resets a step budget to its default, and escape closes. Click a row to select it, click `−` or `+` to change a budget, and use the wheel to scroll.
 
-The dialog writes `steps:` into the agent definition file (`~/.config/opencode/agents/<id>.md`, or `.opencode/agents` when the project has one), and the installer keeps the value across upgrades unless `--reset-steps` is passed. The host reloads the agent when that file changes. `STEP_DEFAULTS` in `shared.ts` is the reset target, and no step value is stored in the plugin's own settings. A budget set in the dialog is written to the file, the default in `STEP_DEFAULTS` is what `r` writes back, and the panel and the file therefore always show the same number. Values are clamped to 1-2000.
+The dialog writes `steps:` into the agent definition file (`~/.config/opencode/agents/<id>.md`, or `.opencode/agents` when the project has one), and the installer keeps the value across upgrades unless `--reset-steps` is passed. The host reloads the agent when that file changes. `STEP_DEFAULTS` in `src/shared/agents.ts` is the reset target, and no step value is stored in the plugin's own settings. A budget set in the dialog is written to the file, the default in `STEP_DEFAULTS` is what `r` writes back, and the panel and the file therefore always show the same number. Values are clamped to 1-2000.
 
 Turning an animation off stops its timer, including the 60ms repaint loop the todo animation drove.
 
@@ -181,7 +181,7 @@ npx tsc --noEmit
 npm run dry-run
 ```
 
-`bin/install.mjs` is checked by tsc through `allowJs`/`checkJs`. `@opentui/core` declares `node >= 26.4` for its own runtime, so `EBADENGINE` on install is harmless here. `npm test` runs the `node:test` suites in `tests/` through `tsx` (a dev-only dependency, not shipped), and `npx tsc --noEmit` still typechecks the plugin and the tests.
+`bin/install.mjs` is checked by tsc through `allowJs`/`checkJs`. `@opentui/core` declares `node >= 26.4` for its own runtime, so `EBADENGINE` on install is harmless here. `index.ts` (server) and `tui.tsx` (TUI) are composition roots; the implementation lives under `src/shared` (pure helpers), `src/server` (tools, hooks, commands), and `src/tui` (components). The installer copies the root files plus `src/` recursively. `npm test` runs the `node:test` suites in `tests/` through `tsx` (a dev-only dependency, not shipped), and `npx tsc --noEmit` still typechecks the plugin and the tests.
 
 ## Troubleshooting
 

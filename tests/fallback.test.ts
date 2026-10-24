@@ -1,6 +1,6 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult, resultText, type ParsedModel } from "../fallback"
+import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult, resultText, type ParsedModel } from "../src/shared/fallback"
 
 function model(id: string): ParsedModel {
   const parsed = parseModel(id)

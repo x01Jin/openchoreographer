@@ -1,22 +1,13 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
-import {
-  AGENT_IDS,
-  LENSES,
-  MAX_RESULT_CHARS,
-  REVIEWER_IDS,
-  STEP_DEFAULTS,
-  buildDelegationText,
-  buildReviewBrief,
-  clipResultStats,
-  displayWidth,
-  isSidebarStatusEvent,
-  normalizeOptions,
-  shouldRefreshSidebar,
-  validateDiffInput,
-  type Options,
-} from "../shared"
-import { STEPS_MAX, STEPS_MIN } from "../settings"
+import { AGENT_IDS, REVIEWER_IDS, STEP_DEFAULTS } from "../src/shared/agents"
+import { LENSES, buildDelegationText, buildReviewBrief } from "../src/shared/review"
+import { MAX_RESULT_CHARS, clipResultStats } from "../src/shared/results"
+import { displayWidth } from "../src/shared/text"
+import { isSidebarStatusEvent, shouldRefreshSidebar } from "../src/shared/events"
+import { normalizeOptions, type Options } from "../src/shared/options"
+import { validateDiffInput } from "../src/shared/diff"
+import { STEPS_MAX, STEPS_MIN } from "../src/shared/settings"
 
 function options(overrides: Partial<Options> = {}): Options {
   return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, fallback: {}, ...overrides }

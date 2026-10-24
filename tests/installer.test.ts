@@ -146,6 +146,30 @@ describe("installer step-budget preservation", () => {
     assert.ok(!result.includes("steps: 3"), "body prose is not promoted to a budget");
   });
 
+  test("local install copies the nested source tree and reports stale without --force", () => {
+    const configDir = makeConfigDir();
+    const first = runInstaller(["--local", "--force", "--no-deps"], configDir);
+    assert.equal(first.status, 0, first.stderr);
+    const nestedAgents = path.join(configDir, "plugins", "openchoreographer", "src", "shared", "agents.ts");
+    const nestedFallback = path.join(configDir, "plugins", "openchoreographer", "src", "server", "fallback.ts");
+    const agentsContent = fs.readFileSync(nestedAgents, "utf8");
+    const fallbackContent = fs.readFileSync(nestedFallback, "utf8");
+    assert.ok(agentsContent.trim().length > 0, "nested agents.ts is non-empty");
+    assert.ok(fallbackContent.trim().length > 0, "nested fallback.ts is non-empty");
+    const second = runInstaller(["--local", "--force", "--no-deps"], configDir);
+    assert.equal(second.status, 0, second.stderr);
+    assert.ok(second.stdout.includes("stale=0"), "re-run reports no stale");
+    assert.ok(!second.stdout.includes("stale:"), "re-run reports no stale file line");
+    const tampered = `${agentsContent}\n// TAMPER-NESTED-SRC\n`;
+    fs.writeFileSync(nestedAgents, tampered);
+    const third = runInstaller(["--local", "--no-deps"], configDir);
+    assert.equal(third.status, 2, third.stderr);
+    const output = `${third.stdout}${third.stderr}`;
+    assert.ok(output.includes("stale:"), "tampered file is reported stale");
+    assert.ok(output.includes(nestedAgents), "stale line names the tampered nested path");
+    assert.equal(fs.readFileSync(nestedAgents, "utf8"), tampered, "tampered content survives without --force");
+  });
+
   test("local install ships all eleven agent files to both destinations", () => {
     const configDir = makeConfigDir();
     const result = runInstaller(["--local", "--force", "--no-deps"], configDir);
