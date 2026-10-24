@@ -10,7 +10,7 @@ import { validateDiffInput } from "../src/shared/diff"
 import { STEPS_MAX, STEPS_MIN } from "../src/shared/settings"
 
 function options(overrides: Partial<Options> = {}): Options {
-  return { agent: "orchestrator", maxParallel: 4, maxReviewers: 2, ...overrides }
+  return { agent: "orchestrator", maxReviewers: 2, ...overrides }
 }
 
 // normalizeOptions reports bad input on console.warn; these tests assert returned values only.
@@ -185,19 +185,10 @@ describe("validateDiffInput", () => {
 })
 
 describe("normalizeOptions", () => {
-  test("defaults to orchestrator / 4 / 2", () => {
-    const expected = { agent: "orchestrator", maxParallel: 4, maxReviewers: 2 }
+  test("defaults to orchestrator / 2", () => {
+    const expected = { agent: "orchestrator", maxReviewers: 2 }
     assert.deepEqual(normalizeOptions(undefined), expected)
     assert.deepEqual(normalizeOptions({}), expected)
-  })
-
-  test("clamps maxParallel to 1..8 and floors fractions", () => {
-    assert.equal(normalizeOptions({ maxParallel: 0 }).maxParallel, 1)
-    assert.equal(normalizeOptions({ maxParallel: -3 }).maxParallel, 1)
-    assert.equal(normalizeOptions({ maxParallel: 1 }).maxParallel, 1)
-    assert.equal(normalizeOptions({ maxParallel: 3.7 }).maxParallel, 3)
-    assert.equal(normalizeOptions({ maxParallel: 8 }).maxParallel, 8)
-    assert.equal(normalizeOptions({ maxParallel: 9 }).maxParallel, 8)
   })
 
   test("clamps maxReviewers to 1..4 and floors fractions", () => {
@@ -210,9 +201,6 @@ describe("normalizeOptions", () => {
 
   test("non-numeric values fall back to the defaults", () => {
     muted(() => {
-      assert.equal(normalizeOptions({ maxParallel: "5" }).maxParallel, 4)
-      assert.equal(normalizeOptions({ maxParallel: Number.NaN }).maxParallel, 4)
-      assert.equal(normalizeOptions({ maxParallel: null }).maxParallel, 4)
       assert.equal(normalizeOptions({ maxReviewers: "3" }).maxReviewers, 2)
       assert.equal(normalizeOptions({ maxReviewers: Number.NEGATIVE_INFINITY }).maxReviewers, 2)
     })
@@ -225,6 +213,10 @@ describe("normalizeOptions", () => {
     muted(() => {
       assert.equal(normalizeOptions({ agent: 12 }).agent, "orchestrator")
     })
+  })
+
+  test("ignores a maxParallel plugin option", () => {
+    assert.equal("maxParallel" in normalizeOptions({ maxParallel: 6 }), false)
   })
 })
 
@@ -261,6 +253,28 @@ describe("buildReviewBrief", () => {
     }
   })
 
+  test("a disabled reviewer returns the unavailable message", () => {
+    const brief = buildReviewBrief(options(), ["reviewer"])
+    assert.equal(brief, `The review panel is unavailable because the "reviewer" subagent is disabled in /choreographer. Enable it to run /review-panel.`)
+  })
+
+  test("a disabled reviewer-security omits its routing sentence", () => {
+    const brief = buildReviewBrief(options(), ["reviewer-security"])
+    assert.doesNotMatch(brief, /Route `reviewer-security` as well/)
+    assert.match(brief, /Run a strict review panel on the current changes\./)
+  })
+
+  test("with no disabled subagents the current text is kept", () => {
+    const brief = buildReviewBrief(options())
+    assert.equal(brief, buildReviewBrief(options(), ["backend"]))
+    assert.match(brief, /1\. Inspect/)
+    assert.match(brief, /2\. Always run/)
+    assert.match(brief, /3\. Route/)
+    assert.match(brief, /4\. Route `reviewer-security`/)
+    assert.match(brief, /5\. Launch/)
+    assert.match(brief, /6\. If a reviewer/)
+  })
+
   test("lists every lens id and label", () => {
     for (const maxReviewers of [1, 3]) {
       const brief = buildReviewBrief(options({ maxReviewers }))
@@ -274,8 +288,17 @@ describe("buildReviewBrief", () => {
 
 describe("buildDelegationText", () => {
   test("states the configured maxParallel number", () => {
-    assert.match(buildDelegationText(options({ maxParallel: 6 })), /keeping at most 6 background subagents at once/)
-    assert.match(buildDelegationText(options({ maxParallel: 1 })), /keeping at most 1 background subagents at once/)
+    assert.match(buildDelegationText(options(), [], 6), /keeping at most 6 background subagents at once/)
+    assert.match(buildDelegationText(options(), [], 1), /keeping at most 1 background subagents at once/)
+  })
+
+  test("with a disabled list the line appears with the ids", () => {
+    const text = buildDelegationText(options(), ["backend", "frontend"])
+    assert.match(text, /Disabled subagents \(do not delegate; ignore their instructions\): backend, frontend\./)
+  })
+
+  test("with an empty list the disabled line is absent", () => {
+    assert.doesNotMatch(buildDelegationText(options()), /Disabled subagents/)
   })
 })
 

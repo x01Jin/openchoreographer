@@ -43,7 +43,7 @@ The installer compares file content. Identical files report `same`. Files that d
 
 ## Upgrade paths
 
-For a clone the upgrade path is `git pull && node bin/install.mjs --force`. For the npm package run `opencode plugin update`, then `npx openchoreographer --force`. `--force` keeps an existing `steps:` budget in agent files, so tuned budgets survive an upgrade; `--reset-steps` restores the bundled defaults.
+For a clone the upgrade path is `git pull && node bin/install.mjs --force`. For the npm package run `opencode plugin update`, then `npx openchoreographer --force`. `--force` keeps an existing `steps:` budget in agent files, so tuned budgets survive an upgrade; `--reset-steps` restores the bundled defaults. `--force` installs all agent definitions, so a disabled subagent is re-added on disk until the plugin reloads and re-applies the disabled list; the plugin moves it aside again at setup.
 
 Upgrading from the eighteen-agent layout copies the fourteen current files but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about. The `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
 

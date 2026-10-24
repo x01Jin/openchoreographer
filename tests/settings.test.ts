@@ -4,8 +4,8 @@ import { clampSteps, defaultSettings, mergeSettings, normalizeSettings, normaliz
 
 describe("normalizeSettings", () => {
   test("defaults for undefined and null", () => {
-    assert.deepEqual(normalizeSettings(undefined), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} } })
-    assert.deepEqual(normalizeSettings(null), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} } })
+    assert.deepEqual(normalizeSettings(undefined), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} }, disabled: [], maxParallel: 4 })
+    assert.deepEqual(normalizeSettings(null), { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} }, disabled: [], maxParallel: 4 })
   })
 
   test("keeps booleans and replaces non-booleans with the default", () => {
@@ -135,6 +135,8 @@ describe("normalizeSnapshot", () => {
         models: { primary: {}, fallback: {} },
         configured: {},
         subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
+        disabled: [],
+        maxParallel: 4,
       },
     )
   })
@@ -210,6 +212,8 @@ describe("normalizeSnapshot", () => {
       models: { primary: {}, fallback: {} },
       configured: {},
       subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
+      disabled: [],
+      maxParallel: 4,
     })
   })
 
@@ -410,4 +414,150 @@ describe("mergeSettings models", () => {
     const merged = mergeSettings(current, {}, ["orchestrator", "backend"])
     assert.deepEqual(merged.models, { primary: { backend: "c/d" }, fallback: { backend: ["c/d"] } })
   })
-});
+})
+
+describe("normalizeSettings disabled", () => {
+  test("fills disabled for a legacy payload without it", () => {
+    assert.deepEqual(normalizeSettings({ steps: { backend: 30 } }).disabled, [])
+    assert.deepEqual(normalizeSettings({}).disabled, [])
+  })
+
+  test("filters orchestrator, general, bogus, non-string, and duplicate entries", () => {
+    assert.deepEqual(normalizeSettings({ disabled: ["backend", "orchestrator", "general", "bogus", "backend", 42, null] }).disabled, ["backend"])
+  })
+
+  test("accepts every subagent id once with duplicates collapsed in input order", () => {
+    const ids = ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"]
+    const reversed = [...ids].reverse()
+    const disabled = normalizeSettings({ disabled: [...reversed, reversed[0], reversed[1]] }).disabled
+    assert.deepEqual(disabled, reversed)
+  })
+
+  test("bounds the scan for a huge invalid list", () => {
+    const invalid = Array.from({ length: 100 }, (_, i) => `bogus${i}`)
+    assert.deepEqual(normalizeSettings({ disabled: invalid }).disabled, [])
+  })
+})
+
+describe("mergeSettings disabled", () => {
+  test("an array patch replaces the current list", () => {
+    const current = mergeSettings(defaultSettings(), { disabled: ["backend"] }, [])
+    assert.deepEqual(mergeSettings(current, { disabled: ["frontend", "tester"] }, []).disabled, ["frontend", "tester"])
+  })
+
+  test("a non-array patch leaves the current list untouched", () => {
+    const current = mergeSettings(defaultSettings(), { disabled: ["backend"] }, [])
+    assert.deepEqual(mergeSettings(current, { disabled: "frontend" }, []).disabled, ["backend"])
+    assert.deepEqual(mergeSettings(current, {}, []).disabled, ["backend"])
+  })
+
+  test("orchestrator, bogus, and duplicate patch entries are filtered", () => {
+    assert.deepEqual(mergeSettings(defaultSettings(), { disabled: ["backend", "orchestrator", "bogus", "backend"] }, []).disabled, ["backend"])
+  })
+})
+
+describe("normalizeSnapshot disabled", () => {
+  test("defaults a missing disabled to []", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+    })
+    assert.deepEqual(snap?.disabled, [])
+  })
+
+  test("a stored list is preserved", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+      disabled: ["backend", "frontend"],
+    })
+    assert.deepEqual(snap?.disabled, ["backend", "frontend"])
+  })
+})
+
+describe("normalizeSettings maxParallel", () => {
+  test("floors fractions and clamps to 1..8", () => {
+    assert.equal(normalizeSettings({ maxParallel: 3.7 }).maxParallel, 3)
+    assert.equal(normalizeSettings({ maxParallel: 0 }).maxParallel, 1)
+    assert.equal(normalizeSettings({ maxParallel: 9 }).maxParallel, 8)
+  })
+
+  test("absent, non-number, and non-finite values fall back to 4", () => {
+    assert.equal(normalizeSettings({}).maxParallel, 4)
+    assert.equal(normalizeSettings({ maxParallel: "4" }).maxParallel, 4)
+    assert.equal(normalizeSettings({ maxParallel: null }).maxParallel, 4)
+    assert.equal(normalizeSettings({ maxParallel: Number.NaN }).maxParallel, 4)
+    assert.equal(normalizeSettings({ maxParallel: Number.POSITIVE_INFINITY }).maxParallel, 4)
+  })
+})
+
+describe("mergeSettings maxParallel", () => {
+  test("sets a finite number", () => {
+    assert.equal(mergeSettings(defaultSettings(), { maxParallel: 2 }, []).maxParallel, 2)
+  })
+
+  test("null resets to 4", () => {
+    const current = mergeSettings(defaultSettings(), { maxParallel: 2 }, [])
+    assert.equal(mergeSettings(current, { maxParallel: null }, []).maxParallel, 4)
+  })
+
+  test("floors and clamps", () => {
+    assert.equal(mergeSettings(defaultSettings(), { maxParallel: 3.7 }, []).maxParallel, 3)
+    assert.equal(mergeSettings(defaultSettings(), { maxParallel: 0 }, []).maxParallel, 1)
+    assert.equal(mergeSettings(defaultSettings(), { maxParallel: 9 }, []).maxParallel, 8)
+  })
+
+  test("a single patch with disabled and maxParallel keeps both", () => {
+    const merged = mergeSettings(defaultSettings(), { disabled: ["writer"], maxParallel: 2 }, [])
+    assert.deepEqual(merged.disabled, ["writer"])
+    assert.equal(merged.maxParallel, 2)
+  })
+})
+
+describe("normalizeSnapshot maxParallel", () => {
+  test("defaults to 4 when missing", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+    })
+    assert.equal(snap?.maxParallel, 4)
+  })
+
+  test("keeps a stored override", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+      maxParallel: 2,
+    })
+    assert.equal(snap?.maxParallel, 2)
+  })
+
+  test("clamps a stored override and resets invalid values to 4", () => {
+    const clamped = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+      maxParallel: 9,
+    })
+    assert.equal(clamped?.maxParallel, 8)
+    for (const invalid of [null, "4", Number.NaN]) {
+      const snap = normalizeSnapshot({
+        animations: { todo: true, running: true },
+        steps: {},
+        defaults: {},
+        managed: [],
+        maxParallel: invalid,
+      })
+      assert.equal(snap?.maxParallel, 4)
+    }
+  })
+})

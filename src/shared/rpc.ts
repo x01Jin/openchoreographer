@@ -50,6 +50,12 @@ const subagentsSchema = {
   items: { type: "string" },
 } as const
 
+const disabledSchema = {
+  type: "array",
+  items: { type: "string" },
+  maxItems: 32,
+} as const
+
 const snapshotSchema = {
   type: "object",
   properties: {
@@ -61,8 +67,10 @@ const snapshotSchema = {
     models: modelsSchema,
     configured: configuredSchema,
     subagents: subagentsSchema,
+    disabled: disabledSchema,
+    maxParallel: { type: "integer", minimum: 1, maximum: 8 },
   },
-  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents"],
+  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents", "disabled", "maxParallel"],
   additionalProperties: false,
 } as const
 
@@ -103,6 +111,8 @@ const setSettings = {
         },
         additionalProperties: false,
       },
+      disabled: disabledSchema,
+      maxParallel: { type: "integer", minimum: 1, maximum: 8 },
     },
     additionalProperties: false,
   },

@@ -49,6 +49,7 @@ export default Plugin.define({
     const [defaults, setDefaults] = createSignal<Record<string, number | null>>({})
     const [configured, setConfigured] = createSignal<Record<string, string | null>>({})
     const [subagents, setSubagents] = createSignal<string[]>([])
+    const [disabled, setDisabled] = createSignal<string[]>([])
     const [online, setOnline] = createSignal(true)
     let inflight = 0
     let mutation = 0
@@ -111,18 +112,25 @@ export default Plugin.define({
       const subagentsSame =
         currentSubagents.length === snap.subagents.length &&
         snap.subagents.every((id, index) => currentSubagents[index] === id)
-      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame) return
+      const currentDisabled = disabled()
+      const disabledSame =
+        currentDisabled.length === snap.disabled.length &&
+        snap.disabled.every((id, index) => currentDisabled[index] === id)
+      const maxParallelSame = settings.maxParallel === snap.maxParallel
+      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame) return
       batch(() => {
         void setSettings((draft) => {
           draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
           draft.ui = { todos: snap.ui.todos, roster: snap.ui.roster }
           draft.steps = { ...snap.steps }
           draft.models = { primary: { ...snap.models.primary }, fallback: copyFallback(snap.models.fallback) }
+          draft.maxParallel = snap.maxParallel
         })
         setManaged([...snap.managed])
         setDefaults({ ...snap.defaults })
         setConfigured({ ...snap.configured })
         setSubagents([...snap.subagents])
+        setDisabled([...snap.disabled])
         bump()
       })
     }
@@ -183,6 +191,30 @@ export default Plugin.define({
       void rpc.setSettings({ ui: key === "todos" ? { todos: value } : { roster: value } }, callOptions).catch(() => {
         setOnline(false)
         context.ui.toast.show({ message: "Choreographer settings unavailable", variant: "warning" })
+      }).finally(settle)
+    }
+
+    const saveMaxParallel = (value: number) => {
+      const prev = settings.maxParallel
+      mutation += 1
+      const at = mutation
+      void setSettings((draft) => {
+        draft.maxParallel = value
+      })
+      bump()
+      inflight += 1
+      void rpc.setSettings({ maxParallel: value }, callOptions).then((snap) => {
+        if (at === mutation) applySnapshot(snap)
+      }).catch(() => {
+        setOnline(false)
+        context.ui.toast.show({ message: "Could not save max parallel: server plugin unreachable", variant: "warning" })
+        if (at === mutation) {
+          void setSettings((draft) => {
+            draft.maxParallel = prev
+          })
+        } else {
+          void syncSettings(false)
+        }
       }).finally(settle)
     }
 
@@ -303,6 +335,23 @@ export default Plugin.define({
 
     const agentById = (id: string): AgentInfo | undefined => (agentList() ?? []).find((agent) => agent.id === id)
 
+    const toggleAgent = (id: string): void => {
+      const prev = disabled()
+      const next = prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]
+      mutation += 1
+      const at = mutation
+      setDisabled([...next])
+      bump()
+      inflight += 1
+      void rpc.setSettings({ disabled: next }, callOptions).then((snap) => {
+        if (at === mutation) applySnapshot(snap)
+      }).catch(() => {
+        setOnline(false)
+        context.ui.toast.show({ message: "Could not save subagent toggle: server plugin unreachable", variant: "warning" })
+        void syncSettings(false)
+      }).finally(settle)
+    }
+
     const openSettings = () => {
       if (inflight === 0) void syncSettings(false)
       context.ui.dialog.set({ size: "large", centered: true })
@@ -319,10 +368,13 @@ export default Plugin.define({
           toggleAnimation={toggleAnimation}
           toggleUi={toggleUi}
           flushSteps={flushSteps}
+          saveMaxParallel={saveMaxParallel}
           catalog={models}
           modelSettings={modelSettings}
           configured={configured}
           subagents={subagents}
+          disabled={disabled}
+          toggleAgent={toggleAgent}
           savePrimary={savePrimary}
           saveFallback={saveFallback}
         />
@@ -360,7 +412,7 @@ export default Plugin.define({
       return index
     })
     const subagentList = createMemo((): AgentInfo[] => {
-      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent" && SUBAGENT_IDS.includes(agent.id)).sort((a, b) => a.name.localeCompare(b.name))
+      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent" && SUBAGENT_IDS.includes(agent.id) && !disabled().includes(agent.id)).sort((a, b) => a.name.localeCompare(b.name))
     })
     const primary = createMemo((): AgentInfo[] => {
       return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent").sort((a, b) => a.name.localeCompare(b.name))

@@ -1,6 +1,6 @@
 import type { AgentInfo, SessionInfo } from "@opencode/client"
 import { Plugin } from "@opencode/plugin/tui"
-import { For, Show } from "solid-js"
+import { For, Show, createSignal } from "solid-js"
 import type { Store } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
 import type { ChoreographerSettings } from "../shared/settings"
@@ -77,16 +77,30 @@ export function Sidebar(props: SidebarProps) {
   const runningRow = (session: SessionInfo) => {
     const agent = () => (props.agentList() ?? []).find((candidate) => candidate.id === session.agent)
     const model = () => { const found = agent(); return session.model ? modelName(session.model, props.modelIndex()) : found?.model ? modelName(found.model, props.modelIndex()) : "inherit" }
+    const [hovered, setHovered] = createSignal(false)
     return (
-      <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
+      <box
+        flexDirection="row"
+        width="100%"
+        justifyContent="space-between"
+        columnGap={1}
+        onMouseOver={() => setHovered(true)}
+        onMouseOut={() => setHovered(false)}
+        onMouseDown={(event) => {
+          if (event.button !== 0 || event.isDragging) return
+          event.stopPropagation()
+          props.context.ui.router.navigate({ type: "session", sessionID: session.id })
+        }}
+      >
         <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
           <text wrapMode="none" flexShrink={0} fg={props.context.theme.text.faint} selectable={false}>{"  "}</text>
-          <text wrapMode="none" fg={agentColor(agent(), session.agent)} selectable={false}>
+          <text wrapMode="none" fg={agentColor(agent(), session.agent)} attributes={hovered() ? TextAttributes.BOLD : undefined} selectable={false}>
             {truncate(agent()?.name ?? session.agent ?? "unknown", NAME_WIDTH)}
           </text>
+          <text wrapMode="none" flexShrink={0} fg={hovered() ? props.context.theme.text.base : props.context.theme.text.faint} selectable={false}>{" ↗"}</text>
         </box>
         <box flexShrink={0}>
-          <text wrapMode="none" fg={props.context.theme.text.muted} selectable={false}>
+          <text wrapMode="none" fg={hovered() ? props.context.theme.text.base : props.context.theme.text.muted} selectable={false}>
             {truncate(model(), MODEL_WIDTH)}
           </text>
         </box>

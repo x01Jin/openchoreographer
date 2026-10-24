@@ -41,7 +41,7 @@ If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the
 | Sidebar and settings dialog | [docs/ui.md](docs/ui.md) | Roster sections, toggles, step and model rows, picker keys |
 | The diff tool | [docs/diff.md](docs/diff.md) | Parameters, output shape, Risk line, limits, CRLF handling |
 | Todos and fallback status | [docs/tools.md](docs/tools.md) | todowrite, todoread, fallback_status |
-| Plugin options | [docs/configuration.md](docs/configuration.md) | agent, maxParallel, maxReviewers, with an example |
+| Plugin options | [docs/configuration.md](docs/configuration.md) | agent, maxReviewers, with an example |
 | Working on the plugin | [docs/development.md](docs/development.md) | Layout, scripts, installer checks, style, id duplication |
 | When something is wrong | [docs/troubleshooting.md](docs/troubleshooting.md) | Common failures and what fixes each one |
 

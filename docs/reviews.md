@@ -2,7 +2,7 @@
 
 Run it on changes that arrived from elsewhere: a pull, a teammate's branch, or manual edits. The orchestrator already runs reviewers before delegation and after its workers edit, so an orchestration run needs no separate panel; `/review-panel` gives that same panel without starting a run.
 
-`/review-panel` builds a brief and hands it to the orchestrator. The brief always runs `reviewer` once with the `correctness` lens, then at most `maxReviewers - 1` further lens calls, each as its own `reviewer` call with `lens: <id>`. `reviewer-security` is an additional call outside that cap, added only when its triggers fire.
+`/review-panel` builds a brief and hands it to the orchestrator. When the `reviewer` subagent is disabled, the brief reports that the panel is unavailable instead of running anything. Otherwise the brief always runs `reviewer` once with the `correctness` lens, then at most `maxReviewers - 1` further lens calls, each as its own `reviewer` call with `lens: <id>`. `reviewer-security` is an additional call outside that cap, added only when its triggers fire; the routing sentence for it is omitted when `reviewer-security` is disabled.
 
 The lens table lives in `src/shared/review.ts` and is injected into the brief as one `id — label: hint` line per lens. The eleven lenses are correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, and testing.
 

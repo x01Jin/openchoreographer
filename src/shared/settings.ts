@@ -7,7 +7,7 @@ export type ModelSettings = {
   primary: Record<string, string>
   fallback: Record<string, string[]>
 }
-export type ChoreographerSettings = { animations: Animations; ui: Ui; steps: Record<string, number>; models: ModelSettings }
+export type ChoreographerSettings = { animations: Animations; ui: Ui; steps: Record<string, number>; models: ModelSettings; disabled: string[]; maxParallel: number }
 export type SettingsSnapshot = {
   animations: Animations
   ui: Ui
@@ -17,10 +17,15 @@ export type SettingsSnapshot = {
   models: ModelSettings
   configured: Record<string, string | null>
   subagents: string[]
+  disabled: string[]
+  maxParallel: number
 }
 export const STEPS_MIN = 1
 export const STEPS_MAX = 2000
 export const STEPS_STEP = 5
+export const PARALLEL_MIN = 1
+export const PARALLEL_MAX = 8
+export const PARALLEL_DEFAULT = 4
 export const SETTINGS_KEY = "settings"
 
 const MODEL_AGENTS_MAX = 32
@@ -28,7 +33,7 @@ const MODEL_FALLBACK_MAX = 8
 const MODEL_REF_MAX = 200
 
 export function defaultSettings(): ChoreographerSettings {
-  return { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} } }
+  return { animations: { todo: true, running: true }, ui: { todos: true, roster: true }, steps: {}, models: { primary: {}, fallback: {} }, disabled: [], maxParallel: PARALLEL_DEFAULT }
 }
 
 export function clampSteps(value: number): number {
@@ -56,6 +61,25 @@ function validModelRef(value: unknown): string | undefined {
   if (value.length === 0 || value.length > MODEL_REF_MAX) return undefined
   if (parseModel(value) === undefined) return undefined
   return value
+}
+
+export function normalizeMaxParallel(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return PARALLEL_DEFAULT
+  return Math.min(PARALLEL_MAX, Math.max(PARALLEL_MIN, Math.floor(value)))
+}
+
+function normalizeDisabled(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const disabled: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value.slice(0, 64)) {
+    if (disabled.length >= 32) break
+    if (typeof entry !== "string" || !SUBAGENT_SET.has(entry)) continue
+    if (seen.has(entry)) continue
+    seen.add(entry)
+    disabled.push(entry)
+  }
+  return disabled
 }
 
 function normalizePrimaryRefs(raw: unknown): Record<string, string> {
@@ -133,7 +157,9 @@ export function normalizeSettings(value: unknown, managed?: readonly string[]): 
     }
   }
   const models = normalizeModels(value.models)
-  return { animations, ui, steps, models }
+  const disabled = normalizeDisabled(isRecord(value) ? value.disabled : undefined)
+  const maxParallel = normalizeMaxParallel(isRecord(value) ? value.maxParallel : undefined)
+  return { animations, ui, steps, models, disabled, maxParallel }
 }
 
 function normalizeConfigured(value: unknown): Record<string, string | null> {
@@ -188,7 +214,9 @@ export function normalizeSnapshot(value: unknown): SettingsSnapshot | undefined 
     const subagents = Array.isArray(value.subagents)
       ? (value.subagents as unknown[]).filter((entry): entry is string => typeof entry === "string" && validModelKey(entry)).slice(0, MODEL_AGENTS_MAX)
       : defaultSubagents()
-    return { animations, ui, steps, defaults, managed, models, configured, subagents }
+    const disabled = normalizeDisabled(isRecord(value) ? value.disabled : undefined)
+    const maxParallel = normalizeMaxParallel(isRecord(value) ? value.maxParallel : undefined)
+    return { animations, ui, steps, defaults, managed, models, configured, subagents, disabled, maxParallel }
   } catch {
     return undefined
   }
@@ -214,7 +242,9 @@ export function mergeSettings(
     if (!validModelKey(key) || !SUBAGENT_SET.has(key) || !Array.isArray(entry)) continue
     fallback[key] = [...entry]
   }
-  if (!isRecord(patch)) return { animations, ui, steps, models: { primary, fallback } }
+  const disabled = normalizeDisabled(current.disabled ?? [])
+  let maxParallel = normalizeMaxParallel(current.maxParallel)
+  if (!isRecord(patch)) return { animations, ui, steps, models: { primary, fallback }, disabled, maxParallel }
   if (isRecord(patch.animations)) {
     if (typeof patch.animations.todo === "boolean") animations.todo = patch.animations.todo
     if (typeof patch.animations.running === "boolean") animations.running = patch.animations.running
@@ -263,5 +293,13 @@ export function mergeSettings(
       }
     }
   }
-  return { animations, ui, steps, models: { primary, fallback } }
+  if (Object.prototype.hasOwnProperty.call(patch, "maxParallel")) {
+    const entry = (patch as Record<string, unknown>).maxParallel
+    if (entry === null) maxParallel = PARALLEL_DEFAULT
+    else if (typeof entry === "number" && Number.isFinite(entry)) maxParallel = normalizeMaxParallel(entry)
+  }
+  if (Array.isArray(patch.disabled)) {
+    return { animations, ui, steps, models: { primary, fallback }, disabled: normalizeDisabled(patch.disabled), maxParallel }
+  }
+  return { animations, ui, steps, models: { primary, fallback }, disabled, maxParallel }
 }

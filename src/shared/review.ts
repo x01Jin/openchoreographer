@@ -1,4 +1,5 @@
 import type { Options } from "./options"
+import { PARALLEL_DEFAULT } from "./settings"
 
 type Lens = {
   readonly id: string
@@ -160,26 +161,36 @@ export const LENSES: readonly Lens[] = [
   }
 ]
 
-export function buildDelegationText(options: Options): string {
-  return `Delegate independent work with the built-in subagent tool using background: true, keeping at most ${options.maxParallel} background subagents at once. The tool creates the child session and returns its sessionID, so never create or switch top-level sessions yourself. Issue several subagent calls in one step when the tasks run in parallel, and do not start a second writer on files another worker owns.`
+export function buildDelegationText(options: Options, disabled: readonly string[] = [], maxParallel: number = PARALLEL_DEFAULT): string {
+  const base = `Delegate independent work with the built-in subagent tool using background: true, keeping at most ${maxParallel} background subagents at once. The tool creates the child session and returns its sessionID, so never create or switch top-level sessions yourself. Issue several subagent calls in one step when the tasks run in parallel, and do not start a second writer on files another worker owns.`
+  if (disabled.length === 0) return base
+  return `${base}\nDisabled subagents (do not delegate; ignore their instructions): ${disabled.join(", ")}.`
 }
 
-export function buildReviewBrief(options: Options): string {
+export function buildReviewBrief(options: Options, disabled: readonly string[] = []): string {
+  if (disabled.includes("reviewer")) {
+    return `The review panel is unavailable because the "reviewer" subagent is disabled in /choreographer. Enable it to run /review-panel.`
+  }
   const table = LENSES.map((lens) => `${lens.id} — ${lens.label}: ${lens.focus[0]}`).join("\n")
   const further = Math.max(0, options.maxReviewers - 1)
   const step2 =
     further === 0
       ? "2. Always run `reviewer` once with the `correctness` lens only. No further lens calls are allowed."
       : `2. Always run \`reviewer\` with the \`correctness\` lens. Then pick at most ${further} further lens calls from the table below that match the change, and run each as its own \`reviewer\` call with \`lens: <id>\`.`
-  return [
+  const lines = [
     "Run a strict review panel on the current changes.",
     "",
     `1. Inspect the working tree with the \`diff\` tool. Identify changed files, languages, and the blast radius.`,
     step2,
     "3. Route with this table:",
     table,
-    "4. Route `reviewer-security` as well when the change touches auth, input handling, secrets, deserialization, SSRF, paths, HTML output, or SQL/shell construction. This is an additional call that does not count toward the lens-call cap; skip it when the triggers do not match.",
+  ]
+  if (!disabled.includes("reviewer-security")) {
+    lines.push("4. Route `reviewer-security` as well when the change touches auth, input handling, secrets, deserialization, SSRF, paths, HTML output, or SQL/shell construction. This is an additional call that does not count toward the lens-call cap; skip it when the triggers do not match.")
+  }
+  lines.push(
     "5. Launch with `background: true`, keep the sessionIDs, collect results, dedupe on identical file:line:issue keeping the more specific lens' finding, and list anything unverified separately.",
     "6. If a reviewer returns no VERDICT line, treat its review as failed and rerun it once with a narrower file list."
-  ].join("\n")
+  )
+  return lines.join("\n")
 }

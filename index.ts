@@ -3,7 +3,7 @@ import { AGENT_IDS, STEP_DEFAULTS, SUBAGENT_IDS } from "./src/shared/agents"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
 import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
-import { agentDirs, agentFilePath, readAgentSteps, writeAgentSteps } from "./src/server/agent-files"
+import { agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "./src/server/agent-files"
 import { warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
 import { todoTools } from "./src/server/tools/todos"
@@ -76,7 +76,21 @@ export default Plugin.define({
       }
       const settings = { current: normalized }
       const getModels = (): ModelSettings => settings.current.models
+      const getDisabled = (): string[] => settings.current.disabled
       const dirs = agentDirs(ctx.location)
+      if (!storedOk) {
+        console.warn("openchoreographer: settings unavailable, skipping agent file sync")
+      } else {
+        try {
+          const synced = syncAgentFiles(dirs, settings.current.disabled)
+          const orchestratorRules = syncOrchestratorRules(dirs, settings.current.disabled)
+          const teams = syncTeamLines(dirs, settings.current.disabled)
+          if (synced || orchestratorRules || teams) scheduleReload()
+        } catch (error) {
+          console.warn(`openchoreographer: agent file sync failed: ${error instanceof Error ? error.message : String(error)}`)
+          scheduleReload()
+        }
+      }
       let fileSteps: Record<string, number> = {}
       for (const id of managedIds) {
         const value = readAgentSteps(dirs, id)
@@ -113,6 +127,8 @@ export default Plugin.define({
           models,
           configured: await loadConfigured(),
           subagents: [...subagents],
+          disabled: [...settings.current.disabled],
+          maxParallel: settings.current.maxParallel,
         }
       }
       let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
@@ -127,9 +143,8 @@ export default Plugin.define({
           return snapshot()
         },
         setSettings: async (input) => {
-          settings.current = mergeSettings(settings.current, input, managedIds)
-          settings.current.steps = {}
-          const patch = (typeof input === "object" && input !== null ? input : undefined) as { steps?: unknown } | undefined
+          const next = mergeSettings(settings.current, input, managedIds)
+          const patch = (typeof input === "object" && input !== null ? input : undefined) as { steps?: unknown; disabled?: unknown } | undefined
           if (patch !== undefined && patch.steps !== null && typeof patch.steps === "object" && !Array.isArray(patch.steps)) {
             const stepsPatch = patch.steps as Record<string, unknown>
             const targets: { id: string; path: string; value: number }[] = []
@@ -138,7 +153,7 @@ export default Plugin.define({
               const value =
                 raw === null ? STEP_DEFAULTS[id] : typeof raw === "number" ? clampSteps(raw) : undefined
               if (value === undefined) continue
-              const path = agentFilePath(dirs, id)
+              const path = agentStepsPath(dirs, id)
               if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
               targets.push({ id, path, value })
             }
@@ -148,6 +163,57 @@ export default Plugin.define({
             }
             scheduleReload()
           }
+          if (patch !== undefined && Array.isArray(patch.disabled)) {
+            const oldDisabled = settings.current.disabled
+            const oldSet = new Set(oldDisabled)
+            const nextSet = new Set(next.disabled)
+            const added = next.disabled.filter((id) => !oldSet.has(id))
+            const removed = oldDisabled.filter((id) => !nextSet.has(id))
+            const appliedAdded: string[] = []
+            const appliedRemoved: string[] = []
+            let filesChanged = false
+            try {
+              for (const id of added) {
+                if (disableAgentFile(dirs, id)) filesChanged = true
+                appliedAdded.push(id)
+              }
+              for (const id of removed) {
+                if (enableAgentFile(dirs, id)) filesChanged = true
+                appliedRemoved.push(id)
+              }
+              if (syncOrchestratorRules(dirs, next.disabled)) filesChanged = true
+              if (syncTeamLines(dirs, next.disabled)) filesChanged = true
+              if (filesChanged) scheduleReload()
+            } catch (error) {
+              for (const id of appliedAdded) {
+                try {
+                  enableAgentFile(dirs, id)
+                } catch {
+                  // Revert is best-effort; the original error below is what matters.
+                }
+              }
+              for (const id of appliedRemoved) {
+                try {
+                  disableAgentFile(dirs, id)
+                } catch {
+                  // Revert is best-effort; the original error below is what matters.
+                }
+              }
+              try {
+                syncOrchestratorRules(dirs, oldDisabled)
+              } catch {
+                // Revert is best-effort; the original error below is what matters.
+              }
+              try {
+                syncTeamLines(dirs, oldDisabled)
+              } catch {
+                // Revert is best-effort; the original error below is what matters.
+              }
+              throw error
+            }
+          }
+          settings.current = next
+          settings.current.steps = {}
           await ctx.storage.set(SETTINGS_KEY, settings.current)
           const snap = await snapshot()
           if (emitUpdated) await emitUpdated(snap)
@@ -158,16 +224,16 @@ export default Plugin.define({
       emitUpdated = (snap) => rpc.events.emit("updated", snap)
       registrations.push(await retryHook(ctx, getModels))
 
-      registrations.push(await subagentBeforeHook(ctx, getModels))
+      registrations.push(await subagentBeforeHook(ctx, getModels, getDisabled))
 
       registrations.push(await subagentAfterHook(ctx))
 
-      registrations.push(await subagentTransform(ctx, getModels))
+      registrations.push(await subagentTransform(ctx, getModels, getDisabled))
 
       const listed = await ctx.agent.list({ location: ctx.location }).catch(() => undefined)
       if (listed) {
         const ids = listed.data.map((agent) => agent.id)
-        const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id)) : []
+        const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id) && !settings.current.disabled.includes(id)) : []
         if (missing.length > 0) {
           console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
         }
@@ -184,9 +250,9 @@ export default Plugin.define({
 
       registrations.push(await fallbackStatusTool(ctx, breaker, getModels))
 
-      registrations.push(await commands(ctx, options))
+      registrations.push(await commands(ctx, options, getDisabled))
 
-      registrations.push(await contextHook(ctx, options))
+      registrations.push(await contextHook(ctx, options, getDisabled, () => settings.current.maxParallel))
 
       if (generation !== epoch) {
         const stale = [...registrations].reverse()

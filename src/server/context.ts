@@ -1,9 +1,10 @@
 import type { Plugin } from "@opencode/plugin"
 import { isReviewer, isWorker, REVIEWER_PLAN_ID } from "../shared/agents"
 import type { Options } from "../shared/options"
+import { PARALLEL_DEFAULT } from "../shared/settings"
 import { buildDelegationText } from "../shared/review"
 
-export function contextHook(ctx: Plugin.Context, options: Options) {
+export function contextHook(ctx: Plugin.Context, options: Options, getDisabled: () => readonly string[] = () => [], getMaxParallel: () => number = () => PARALLEL_DEFAULT) {
   return ctx.session.hook("context", (event) => {
     if (event.agent === options.agent) {
       event.system.push({
@@ -17,7 +18,7 @@ export function contextHook(ctx: Plugin.Context, options: Options) {
       delete event.tools.write
       delete event.tools.patch
       delete event.tools.shell
-      event.system.push({ type: "text", text: buildDelegationText(options) })
+      event.system.push({ type: "text", text: buildDelegationText(options, getDisabled(), getMaxParallel()) })
       return
     }
     if (isReviewer(event.agent)) {

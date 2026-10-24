@@ -27,7 +27,7 @@ export function retryHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   })
 }
 
-export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
+export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSettings, getDisabled: () => readonly string[] = () => []) {
   return ctx.tool.hook("execute.before", async (event) => {
     if (event.tool !== "subagent") return
     if (typeof event.input !== "object" || event.input === null) return
@@ -35,6 +35,7 @@ export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSe
     const record = event.input as Record<string, unknown>
     if (typeof record.agent !== "string") return
     const agent = record.agent
+    if (getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
     const overrides = getModels()
     const alternates = resolveFallbacks(agent, overrides)
     const configured = await resolvePrimary(ctx, agent, overrides)
@@ -96,7 +97,7 @@ export function subagentAfterHook(ctx: Plugin.Context) {
   })
 }
 
-export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings) {
+export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings, getDisabled: () => readonly string[] = () => []) {
   return ctx.tool.transform((editor) => {
     const target = editor.get("subagent")
     if (target === undefined || typeof target.execute !== "function") return
@@ -105,8 +106,9 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
       tool.execute = async (input, context) => {
         // The subagent input shape is host-defined, so narrow it once to read fields.
         const fields = input as Record<string, unknown>
-        const startedAt = Date.now()
         const agent = typeof fields.agent === "string" ? fields.agent : undefined
+        if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
+        const startedAt = Date.now()
         const overrides = getModels()
         const alternatesForAgent = agent !== undefined ? resolveFallbacks(agent, overrides) : []
         const used =
@@ -158,6 +160,7 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
                 }
               }
               const next = formatModelRef(alternate)
+              if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
               try {
                 const retried = await original({ ...fields, model: next }, context)
                 const settled = planRetriedResult({ result: retried, alternate })
@@ -172,6 +175,7 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
           }
           return result
         } catch (error) {
+          if (agent !== undefined && getDisabled().includes(agent)) throw error
           // A cancelled child is not a provider failure; retrying would ignore the abort.
           if (context.signal.aborted) throw error
           const message = error instanceof Error ? error.message : String(error)
@@ -196,6 +200,7 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
             }
           }
           const alternate = formatModelRef(choice.model)
+          if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
           try {
             const result = await original({ ...fields, model: alternate }, context)
             breaker.succeed(choice.model, startedAt)
