@@ -1,6 +1,6 @@
 # openchoreographer
 
-A read-only orchestrator, nine specialist agents, and a collapsible agent roster for OpenCode V2.
+A read-only orchestrator, eleven specialist agents, and a collapsible agent roster for OpenCode V2.
 
 ## Install
 
@@ -9,7 +9,7 @@ opencode plugin add openchoreographer
 npx openchoreographer --no-plugin
 ```
 
-The first command registers the plugin. The second writes the nine agent definitions into `~/.config/opencode/agents/` — OpenCode cannot create agents at runtime, so the Markdown files have to be on disk — and `--no-plugin` stops the installer from copying a second copy of the plugin into `~/.config/opencode/plugins/`. Restart OpenCode afterwards.
+The first command registers the plugin. The second writes the eleven agent definitions into `~/.config/opencode/agents/` — OpenCode cannot create agents at runtime, so the Markdown files have to be on disk — and `--no-plugin` stops the installer from copying a second copy of the plugin into `~/.config/opencode/plugins/`. Restart OpenCode afterwards.
 
 From a clone, or to pin a commit:
 
@@ -26,7 +26,7 @@ Flags: `--local` copies the plugin plus agents into the global config dir; `--pr
 
 The installer compares file content. Identical files report `same`. Files that differ without `--force` are skipped and listed as `stale`, except an agent file whose only difference is a preserved `steps:` budget reports `same`, is not written, and does not raise the exit code; everything else is still written, and the process exits 2 so a script can detect an incomplete upgrade. For a clone the upgrade path is `git pull && node bin/install.mjs --force`; for the npm package run `opencode plugin update`, then `npx openchoreographer --force`. `--force` keeps an existing `steps:` budget in agent files, so tuned budgets survive an upgrade; `--reset-steps` restores the bundled defaults.
 
-Upgrading from the eighteen-agent layout copies the nine but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about; the `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
+Upgrading from the eighteen-agent layout copies the eleven but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about; the `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
 
 `--local` and `--project` run `npm install --omit=dev` in the copied plugin directory, because `tui.tsx` has runtime imports (`solid-js`, `@opentui/*`) that a copied directory cannot resolve on its own. `--no-deps` skips this, at the cost of the sidebar failing to load.
 
@@ -37,7 +37,7 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 - Registers `/orchestrate` and `/review-panel`.
 - The orchestrator cannot edit, write, or run shell. Every change goes through a worker subagent.
 - A read-only `diff` tool is registered for the orchestrator and the reviewers, so they can verify what workers changed without shell access.
-- A sidebar roster shows PRIMARY / WORKERS / REVIEWERS with each agent's model, plus running child sessions. WORKERS is every subagent that is not a reviewer, including `explore`, `tester`, and any built-in or user subagent, not only the four domain workers in the table.
+- A sidebar roster shows PRIMARY / WORKERS / REVIEWERS with each agent's model, plus running child sessions. WORKERS is every subagent that is not a reviewer, including `explore`, `tester`, and any built-in or user subagent, not only the five domain workers and the two specialists in the table.
 - Delegation guidance is injected into the orchestrator's system context, and the strict review protocol lives in the two reviewer agent definitions.
 - Each text part of a subagent result over 4000 characters is clipped before the orchestrator sees it: the head and the tail survive (the worker return contract puts TASK and FILES at the top, BLOCKED and RISK at the bottom) with a marker giving the dropped character count. This is a safety net for foreground subagent calls; a background child returns its sessionID immediately and the parent's copy of its report is delivered by the host.
 
@@ -52,10 +52,14 @@ Do not load a local copy and the npm or GitHub package at once. Two copies regis
 | `database` | subagent | 60 | schemas, migrations, queries | edit + shell on assigned files |
 | `devops` | subagent | 60 | build, CI, containers, deploys | edit + shell on assigned files |
 | `tester` | subagent | 70 | reproduces bugs, writes tests, reports results | edit + shell on assigned files |
+| `designer` | subagent | 40 | UI flows, states, copy, and accessibility intent | read only |
+| `writer` | subagent | 50 | README, docs, changelog, migration notes | Markdown edit + shell |
 | `reviewer` | subagent | 40 | strict read-only review through one lens | `diff`, read only |
 | `reviewer-security` | subagent | 35 | strict read-only security review | `diff`, read only |
 
 The panel is one `reviewer` with a lens argument plus a conditional `reviewer-security`. The lens list (correctness, oop, functional, procedural, concurrency, distributed, data, api, frontend, performance, testing) lives in `shared.ts` and is injected as one `id — label: hint` line per lens, not copied into the agent files.
+
+The orchestrator runs `designer` before `frontend` when a task changes a flow, state, empty/error case, or copy, pasting its states and copy into the frontend prompt. It runs `writer` after behavior and interface settle, and `writer` reports `BLOCKED` when docs need a code change.
 
 ## The diff tool
 
@@ -63,7 +67,7 @@ The panel is one `reviewer` with a lens argument plus a conditional `reviewer-se
 
 ## Delegation
 
-Independent work runs as background subagents; each call returns a sessionID immediately, and passing it back continues that same child. Only one writer touches a file set at a time unless the sets are disjoint, and `maxParallel` is a prompt-level hint that enforces nothing. The orchestrator is told to verify a finished batch with a single `diff` read after the batch, narrowing with `path` when it spans many files, rather than re-reading after every child.
+Independent work runs as background subagents; each call returns a sessionID immediately, and passing it back continues that same child. Only one writer touches a file set at a time unless the sets are disjoint, and `maxParallel` is a prompt-level hint that enforces nothing. The orchestrator is told to verify a finished batch with a single `diff` read after the batch, narrowing with `path` when it spans many files, rather than re-reading after every child. A role that fails twice is reported as unavailable, with the model and the failure; its work is never reassigned to a different role. A worker that receives a task outside its role returns `BLOCKED: outside scope; belongs to <role>`; the orchestrator sends that task to the named role instead of attempting it. An override attempt is refused and reported, and the task is not retried.
 
 Effort is tiered, and a tier is a ceiling, not a target: the orchestrator picks the tier before spawning anything and re-checks it against the `Risk:` line the `diff` tool returns. Tier 0 (no file change) spawns nothing; Tier 1 (one mechanical file) is one worker with no reviewer; Tier 2 (two to five files or new tests) adds the correctness lens only; Tier 3 (more than five files or any risk signal) adds correctness plus security, plus `tester` when behavior changed.
 
@@ -105,7 +109,7 @@ Primary models stay where they already are, `agents.<id>.model` in `opencode.jso
 }
 ```
 
-Valid keys are the managed subagents: `explore`, `backend`, `frontend`, `database`, `devops`, `tester`, `reviewer`, `reviewer-security`. Any other key is dropped with a warning. A model string is `provider/model`, optionally `provider/model#variant`; an invalid entry is dropped with a warning, and an empty list disables fallback for that agent.
+Valid keys are the managed subagents: `explore`, `backend`, `frontend`, `database`, `devops`, `tester`, `designer`, `writer`, `reviewer`, `reviewer-security`. Any other key is dropped with a warning. A model string is `provider/model`, optionally `provider/model#variant`; an invalid entry is dropped with a warning, and an empty list disables fallback for that agent.
 
 A 429, a 402, or an error whose message names a rate limit, quota, usage limit, or free-tier limit marks that model unavailable. Availability is tracked per `provider/model`, not per agent, so one exhausted model affects every agent that uses it.
 

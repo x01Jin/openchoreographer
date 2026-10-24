@@ -1,6 +1,6 @@
 {
   "name": "openchoreographer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Read-only orchestrator, worker and reviewer agents, and a collapsible agent/model sidebar for OpenCode V2.",
   "type": "module",
   "license": "MIT",
@@ -35,7 +35,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/fallback.test.ts tests/shared.test.ts tests/diff.test.ts tests/settings.test.ts tests/installer.test.ts",
+    "test": "node --import tsx --test tests/fallback.test.ts tests/shared.test.ts tests/diff.test.ts tests/settings.test.ts tests/installer.test.ts tests/agents.test.ts",
     "prepublishOnly": "npm run typecheck",
     "dry-run": "node bin/install.mjs --dry-run",
     "smoke:install": "node bin/install.mjs --project --dry-run"

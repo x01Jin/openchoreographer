@@ -3,8 +3,9 @@ import { parseModel, type ParsedModel } from "./fallback"
 export const ORCHESTRATOR_ID = "orchestrator"
 export const EXPLORE_ID = "explore"
 export const WORKER_IDS: readonly string[] = ["backend", "frontend", "database", "devops", "tester"]
+export const SPECIALIST_IDS: readonly string[] = ["designer", "writer"]
 export const REVIEWER_IDS: readonly string[] = ["reviewer", "reviewer-security"]
-export const AGENT_IDS: readonly string[] = [ORCHESTRATOR_ID, EXPLORE_ID, ...WORKER_IDS, ...REVIEWER_IDS]
+export const AGENT_IDS: readonly string[] = [ORCHESTRATOR_ID, EXPLORE_ID, ...WORKER_IDS, ...SPECIALIST_IDS, ...REVIEWER_IDS]
 
 // Step budgets the settings dialog resets an agent to when its override is cleared.
 export const STEP_DEFAULTS: Readonly<Record<string, number>> = {
@@ -15,6 +16,8 @@ export const STEP_DEFAULTS: Readonly<Record<string, number>> = {
   database: 60,
   devops: 60,
   tester: 70,
+  designer: 40,
+  writer: 50,
   reviewer: 40,
   "reviewer-security": 35,
 }
@@ -552,10 +555,10 @@ function normalizeFallback(raw: unknown): Readonly<Record<string, readonly Parse
     console.warn(`orchestrator options: expected object for "fallback", received ${received}`)
     return {}
   }
-  const valid = [...WORKER_IDS, EXPLORE_ID, ...REVIEWER_IDS]
+  const valid = [...WORKER_IDS, EXPLORE_ID, ...SPECIALIST_IDS, ...REVIEWER_IDS]
   const result: Record<string, ParsedModel[]> = {}
   for (const [id, value] of Object.entries(raw)) {
-    if (!WORKER_IDS.includes(id) && id !== EXPLORE_ID && !REVIEWER_IDS.includes(id)) {
+    if (!WORKER_IDS.includes(id) && id !== EXPLORE_ID && !SPECIALIST_IDS.includes(id) && !REVIEWER_IDS.includes(id)) {
       console.warn(`orchestrator options: ignoring "fallback" entry for unknown agent "${id}"; valid ids: ${valid.join(", ")}`)
       continue
     }

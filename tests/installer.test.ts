@@ -145,4 +145,19 @@ describe("installer step-budget preservation", () => {
     assert.equal(result, bundledContent());
     assert.ok(!result.includes("steps: 3"), "body prose is not promoted to a budget");
   });
+
+  test("local install ships all eleven agent files to both destinations", () => {
+    const configDir = makeConfigDir();
+    const result = runInstaller(["--local", "--force", "--no-deps"], configDir);
+    assert.equal(result.status, 0, result.stderr);
+    for (const base of [
+      path.join(configDir, "agents"),
+      path.join(configDir, "plugins", "openchoreographer", "agents"),
+    ]) {
+      const files = fs.readdirSync(base).filter((f) => f.endsWith(".md")).sort();
+      assert.equal(files.length, 11, `expected 11 agent files in ${base}`);
+      assert.ok(files.includes("designer.md"), "designer.md is installed");
+      assert.ok(files.includes("writer.md"), "writer.md is installed");
+    }
+  });
 });

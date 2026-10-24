@@ -4,6 +4,7 @@ import {
   AGENT_IDS,
   LENSES,
   MAX_RESULT_CHARS,
+  REVIEWER_IDS,
   STEP_DEFAULTS,
   buildDelegationText,
   buildReviewBrief,
@@ -241,6 +242,22 @@ describe("normalizeOptions", () => {
       backend: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
     })
   })
+
+  test("accepts fallback.designer and fallback.writer models while still rejecting an unknown id", () => {
+    const normalized = muted(() =>
+      normalizeOptions({
+        fallback: {
+          designer: "anthropic/claude-sonnet-4",
+          writer: "anthropic/claude-sonnet-4",
+          bogus: "anthropic/claude-sonnet-4",
+        },
+      }),
+    )
+    assert.deepEqual(normalized.fallback, {
+      designer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
+      writer: [{ providerID: "anthropic", modelID: "claude-sonnet-4", key: "anthropic/claude-sonnet-4" }],
+    })
+  })
 })
 
 describe("buildReviewBrief", () => {
@@ -353,6 +370,23 @@ describe("STEP_DEFAULTS", () => {
       assert.ok(Number.isInteger(budget), `non-integer default for ${id}`)
       assert.ok(budget >= STEPS_MIN && budget <= STEPS_MAX, `default for ${id} outside ${STEPS_MIN}..${STEPS_MAX}`)
     }
+  })
+})
+
+describe("specialist agent ids", () => {
+  test("AGENT_IDS contains designer and writer", () => {
+    assert.ok(AGENT_IDS.includes("designer"), "missing designer in AGENT_IDS")
+    assert.ok(AGENT_IDS.includes("writer"), "missing writer in AGENT_IDS")
+  })
+
+  test("designer and writer are not reviewers", () => {
+    assert.ok(!REVIEWER_IDS.includes("designer"), "designer must not be in REVIEWER_IDS")
+    assert.ok(!REVIEWER_IDS.includes("writer"), "writer must not be in REVIEWER_IDS")
+  })
+
+  test("STEP_DEFAULTS sets designer to 40 and writer to 50", () => {
+    assert.equal(STEP_DEFAULTS.designer, 40)
+    assert.equal(STEP_DEFAULTS.writer, 50)
   })
 })
 
