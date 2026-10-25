@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { isReviewer, isWorker, REVIEWER_PLAN_ID } from "../shared/agents"
 import type { Options } from "../shared/options"
+import { clipSubagentReports } from "../shared/results"
 import { PARALLEL_DEFAULT } from "../shared/settings"
 import { buildDelegationText } from "../shared/review"
 
@@ -19,6 +20,14 @@ export function contextHook(ctx: Plugin.Context, options: Options, getDisabled: 
       delete event.tools.patch
       delete event.tools.shell
       event.system.push({ type: "text", text: buildDelegationText(options, getDisabled(), getMaxParallel()) })
+      // Clipping is best-effort: a failure must never break the request.
+      try {
+        const clipped = clipSubagentReports(event.messages)
+        // The helper returns copies; assigning the array is what replaces the report in the request.
+        if (clipped.clipped > 0) event.messages = clipped.messages
+      } catch (error) {
+        console.warn(`openchoreographer: subagent report budget skipped: ${error instanceof Error ? error.message : String(error)}`)
+      }
       return
     }
     if (isReviewer(event.agent)) {

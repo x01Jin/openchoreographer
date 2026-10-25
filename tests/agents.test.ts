@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, TEAM_IDS, WORKER_IDS } from "../src/shared/agents";
-import { agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "../src/server/agent-files";
+import { ORCHESTRATOR_RULE_LINES, agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "../src/server/agent-files";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -87,6 +87,15 @@ describe("agents", () => {
     assert.deepStrictEqual([...grouped].sort(), [...SUBAGENT_IDS].sort(), "groups cover SUBAGENT_IDS with no omissions");
     for (const id of grouped) {
       assert.ok(SUBAGENT_IDS.includes(id), `${id} is a registered subagent id`);
+    }
+  });
+});
+
+describe("ORCHESTRATOR_RULE_LINES", () => {
+  test("every pruned rule appears as a full line in the real orchestrator", () => {
+    const { lines } = readAgent("orchestrator.md");
+    for (const rule of ORCHESTRATOR_RULE_LINES) {
+      assert.ok(lines.includes(rule), `orchestrator.md is missing the pruned rule: ${rule}`);
     }
   });
 });
@@ -240,9 +249,9 @@ describe("syncOrchestratorRules", () => {
     "Plan stage, before the first delegation:",
     "",
     "- Run `reviewer-scope` only when the value of the work is genuinely unclear: a rewrite, a new subsystem, or work that may already exist. It is advisory: report its verdict, never block on it.",
-    "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 2 and Tier 3 work. Fix blocker findings before delegating.",
+    "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 3 work only. Fix blocker findings before delegating.",
     "- Run `reviewer-execution` on the revised plan when `reviewer-plan` found blockers, or when the plan cites files or symbols you have not verified. A `VERDICT: BLOCK` stops the task until the plan is corrected.",
-    "- Skip plan review on Tier 1 work.",
+    "- Skip plan review on Tier 1 and Tier 2 work.",
     "",
     "- Tier 3, over five files or any `Risk:` signal: workers, correctness lens plus `reviewer-security`, plus `tester` if behavior changed.",
     "",
@@ -250,7 +259,7 @@ describe("syncOrchestratorRules", () => {
   const DESIGNER_LINE = "- Use `designer` before `frontend` when a task changes a flow, state, empty/error case, or user-facing copy; paste its `STATES` and `COPY` into the `frontend` prompt, and never run it alone because it cannot edit.";
   const WRITER_LINE = "- Use `writer` once behavior and interface have settled, for README, docs, changelog, and migration notes; expect `BLOCKED` when the docs need a code change.";
   const REVIEWER_SCOPE_LINE = "- Run `reviewer-scope` only when the value of the work is genuinely unclear: a rewrite, a new subsystem, or work that may already exist. It is advisory: report its verdict, never block on it.";
-  const REVIEWER_PLAN_LINE = "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 2 and Tier 3 work. Fix blocker findings before delegating.";
+  const REVIEWER_PLAN_LINE = "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 3 work only. Fix blocker findings before delegating.";
   const REVIEWER_TIER3 = "- Tier 3, over five files or any `Risk:` signal: workers, correctness lens, plus `tester` if behavior changed.";
   test("disabling designer removes only its line and saves the full copy", () => {
     const dir = makeAgentDir({ "orchestrator.md": MINI_ORCHESTRATOR });
@@ -329,7 +338,7 @@ describe("syncOrchestratorRules", () => {
       assert.ok(!live.includes(REVIEWER_PLAN_LINE));
       assert.ok(live.includes("Plan stage, before the first delegation:"));
       assert.ok(live.includes(REVIEWER_SCOPE_LINE));
-      assert.ok(live.includes("- Skip plan review on Tier 1 work."));
+      assert.ok(live.includes("- Skip plan review on Tier 1 and Tier 2 work."));
     } finally {
       removeDir(dir);
     }

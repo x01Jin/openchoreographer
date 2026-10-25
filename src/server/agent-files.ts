@@ -408,14 +408,24 @@ const EXPLORE_CLAUSE = "; spawn `explore` only when the sweep would flood your c
 const EXPLORE_MAP_RULE = "- When `explore` ran, paste its map verbatim into every child prompt so the child does not rediscover the tree."
 const REVIEWER_SECURITY_SENTENCE = " Add `reviewer-security` when the `Risk:` line from the `diff` tool reports a signal, and also when you judge the change touches input handling, deserialization, SSRF, or path handling, which the signals do not detect."
 const REVIEWER_SCOPE_RULE = "- Run `reviewer-scope` only when the value of the work is genuinely unclear: a rewrite, a new subsystem, or work that may already exist. It is advisory: report its verdict, never block on it."
-const REVIEWER_PLAN_RULE = "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 2 and Tier 3 work. Fix blocker findings before delegating."
+const REVIEWER_PLAN_RULE = "- Run `reviewer-plan` on the written plan before the first delegation, on Tier 3 work only. Fix blocker findings before delegating."
 const REVIEWER_EXECUTION_RULE = "- Run `reviewer-execution` on the revised plan when `reviewer-plan` found blockers, or when the plan cites files or symbols you have not verified. A `VERDICT: BLOCK` stops the task until the plan is corrected."
 const REVIEWER_EXECUTION_RULE_NO_PLAN = "- Run `reviewer-execution` on the revised plan when the plan cites files or symbols you have not verified. A `VERDICT: BLOCK` stops the task until the plan is corrected."
 const TESTER_CLAUSE = ", plus `tester` if behavior changed"
 const REVIEWER_SECURITY_TIER3_CLAUSE = " plus `reviewer-security`"
 const PLAN_STAGE_HEADER = "Plan stage, before the first delegation:"
-const SKIP_PLAN_REVIEW_RULE = "- Skip plan review on Tier 1 work."
+const SKIP_PLAN_REVIEW_RULE = "- Skip plan review on Tier 1 and Tier 2 work."
 const PLAN_REVIEWER_IDS = ["reviewer-scope", "reviewer-plan", "reviewer-execution"]
+
+export const ORCHESTRATOR_RULE_LINES: readonly string[] = [
+  DESIGNER_RULE,
+  WRITER_RULE,
+  EXPLORE_MAP_RULE,
+  REVIEWER_SCOPE_RULE,
+  REVIEWER_PLAN_RULE,
+  REVIEWER_EXECUTION_RULE,
+  SKIP_PLAN_REVIEW_RULE,
+]
 
 function stripLegacyOrchestratorMarkers(content: string): string {
   let next = content

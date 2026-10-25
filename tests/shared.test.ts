@@ -228,18 +228,38 @@ describe("buildReviewBrief", () => {
       /Always run `reviewer` once with the `correctness` lens only\. No further lens calls are allowed\./,
     )
     assert.doesNotMatch(brief, /further lens calls from the table/)
-    assert.doesNotMatch(brief, /at most \d+ further lens calls/)
+    assert.doesNotMatch(brief, /at most \d+ further lens calls?/)
   })
 
-  test("with three reviewers it asks for at most two further lens calls", () => {
+  test("with two reviewers it says one further lens call, not calls", () => {
+    const brief = buildReviewBrief(options({ maxReviewers: 2 }))
+    assert.match(brief, /Then pick at most 1 further lens call from the table below/)
+    assert.doesNotMatch(brief, /1 further lens calls/)
+  })
+
+  test("with three reviewers it caps the second lens at two and requires a domain match", () => {
     const brief = buildReviewBrief(options({ maxReviewers: 3 }))
     assert.match(brief, /Then pick at most 2 further lens calls from the table below/)
+    assert.match(brief, /only when the diff directly touches that lens's domain/)
+    assert.match(brief, /If none match, stop after correctness: the cap is a ceiling, not a target\./)
     assert.doesNotMatch(brief, /No further lens calls are allowed/)
   })
 
   test("with four reviewers it asks for at most three further lens calls", () => {
     const brief = buildReviewBrief(options({ maxReviewers: 4 }))
     assert.match(brief, /Then pick at most 3 further lens calls from the table below/)
+  })
+
+  test("adds a reflect step that never counts toward the lens cap and skips a clean verdict", () => {
+    for (const maxReviewers of [1, 3]) {
+      const brief = buildReviewBrief(options({ maxReviewers }))
+      assert.match(brief, /run one `reviewer` call with the task prefixed `reflect` and `lens: correctness`/, `maxReviewers ${maxReviewers}`)
+      assert.match(brief, /drops findings the diff disproves/, `maxReviewers ${maxReviewers}`)
+      assert.match(brief, /moves findings the diff cannot decide to `Unverified:`/, `maxReviewers ${maxReviewers}`)
+      assert.match(brief, /adds none/, `maxReviewers ${maxReviewers}`)
+      assert.match(brief, /does not count toward the lens cap/, `maxReviewers ${maxReviewers}`)
+      assert.match(brief, /Skip it when the verdict is clean\./, `maxReviewers ${maxReviewers}`)
+    }
   })
 
   test("always routes reviewer-security on its triggers", () => {
@@ -272,7 +292,8 @@ describe("buildReviewBrief", () => {
     assert.match(brief, /3\. Route/)
     assert.match(brief, /4\. Route `reviewer-security`/)
     assert.match(brief, /5\. Launch/)
-    assert.match(brief, /6\. If a reviewer/)
+    assert.match(brief, /6\. When a reviewer returns findings/)
+    assert.match(brief, /7\. If a reviewer/)
   })
 
   test("lists every lens id and label", () => {

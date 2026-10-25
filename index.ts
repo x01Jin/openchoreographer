@@ -11,6 +11,7 @@ import { fallbackStatusTool } from "./src/server/tools/fallback-status"
 import { commands } from "./src/server/commands"
 import { contextHook } from "./src/server/context"
 import { breaker, resetFallbackWrapper, retryHook, subagentAfterHook, subagentBeforeHook, subagentTransform } from "./src/server/fallback"
+import { outputClipHook } from "./src/server/output"
 
 type Registration = { dispose: () => Promise<void> }
 
@@ -227,6 +228,8 @@ export default Plugin.define({
       registrations.push(await subagentBeforeHook(ctx, getModels, getDisabled))
 
       registrations.push(await subagentAfterHook(ctx))
+
+      registrations.push(await outputClipHook(ctx))
 
       registrations.push(await subagentTransform(ctx, getModels, getDisabled))
 

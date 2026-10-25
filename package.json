@@ -33,7 +33,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/fallback.test.ts tests/shared.test.ts tests/diff.test.ts tests/settings.test.ts tests/installer.test.ts tests/agents.test.ts",
+    "test": "node --import tsx --test tests/fallback.test.ts tests/shared.test.ts tests/diff.test.ts tests/settings.test.ts tests/installer.test.ts tests/agents.test.ts tests/clip.test.ts",
     "prepublishOnly": "npm run typecheck",
     "dry-run": "node bin/install.mjs --dry-run",
     "smoke:install": "node bin/install.mjs --project --dry-run"

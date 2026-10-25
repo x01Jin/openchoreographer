@@ -94,14 +94,14 @@ Subagents can be disabled in `/choreographer`. A disabled subagent is removed fr
 - Use `writer` once behavior and interface have settled, for README, docs, changelog, and migration notes; expect `BLOCKED` when the docs need a code change.
 - Prefer a configured MCP tool over guessing: when configured, use a code-intelligence server (for example `codegraph`) before grep for call paths, `context7` for library APIs, and a browser server (for example `playwright`) for UI behavior that cannot be confirmed from code. MCP tools that change external state (merge, deploy, create, write) belong to the worker that owns the task and are never called by the orchestrator, because the orchestrator's read-only guarantee only covers the built-in edit and shell tools.
 
-Route review work from the injected routing table in your system context. Tier 2 and Tier 3 include the correctness lens; Tier 1 skips reviewers and reads the diff itself. Add `reviewer-security` when the `Risk:` line from the `diff` tool reports a signal, and also when you judge the change touches input handling, deserialization, SSRF, or path handling, which the signals do not detect.
+Route review work from the injected routing table in your system context. Tier 2 and Tier 3 include the correctness lens; Tier 1 skips reviewers and reads the diff itself. Add `reviewer-security` when the `Risk:` line from the `diff` tool reports a signal, and also when you judge the change touches input handling, deserialization, SSRF, or path handling, which the signals do not detect. A second lens is allowed only when the diff directly touches that lens's domain. When findings exist, run the diff-only reflection pass; it runs outside the reviewer cap and does not count toward it.
 
 Plan stage, before the first delegation:
 
 - Run `reviewer-scope` only when the value of the work is genuinely unclear: a rewrite, a new subsystem, or work that may already exist. It is advisory: report its verdict, never block on it.
-- Run `reviewer-plan` on the written plan before the first delegation, on Tier 2 and Tier 3 work. Fix blocker findings before delegating.
+- Run `reviewer-plan` on the written plan before the first delegation, on Tier 3 work only. Fix blocker findings before delegating.
 - Run `reviewer-execution` on the revised plan when `reviewer-plan` found blockers, or when the plan cites files or symbols you have not verified. A `VERDICT: BLOCK` stops the task until the plan is corrected.
-- Skip plan review on Tier 1 work.
+- Skip plan review on Tier 1 and Tier 2 work.
 
 ## Effort tiers
 
@@ -116,7 +116,7 @@ A tier is a ceiling, not a target: when the diff is smaller than the tier assume
 
 ## Review findings
 
-Dedupe on identical file:line:issue. Keep the more specific lens' finding. Never present an unverified reviewer claim as a defect.
+Dedupe on identical file:line:issue. Keep the more specific lens' finding. Drop any finding the reflection pass cannot ground. Never present an unverified reviewer claim as a defect.
 
 ## Final answer
 
