@@ -6,6 +6,8 @@ There is no build or emit step. The host loads `index.ts` and `tui.tsx` (TypeScr
 
 Typecheck with `npm run typecheck` (`tsc --noEmit` over `*.ts`, `*.tsx`, `tests/*.ts`, and `bin/install.mjs` through allowJs/checkJs, so JSDoc in the installer is checked). Run tests with `npm test`, which runs the seven suites listed explicitly in `package.json`; a new test file must be added to that list or it never runs. `node bin/install.mjs --dry-run` prints planned actions and writes nothing; `npm run smoke:install` is a project-mode dry run. `tsx` is a dev-only dependency and is not shipped. `@opentui/core` wants Node >= 26.4, so `EBADENGINE` on install is harmless here; the installer itself needs Node >= 22.6.
 
+Changes to prompts, spawn policy, output budgets, or model routing need a V2 session stats before/after using [cost](cost.md). The clip helpers are unit-tested in `tests/clip.test.ts`; `src/server/output.ts`, the context-hook wiring, and `src/tui/**` are not covered by tests.
+
 Style: no semicolons in `index.ts`, `tui.tsx`, and `src/**/*.ts` / `src/**/*.tsx`; semicolons in `tests/*.ts` and `bin/install.mjs`. Match the file you touch.
 
 Agent ids and step defaults are duplicated in `src/shared/agents.ts` (`AGENT_IDS`, `WORKER_IDS`, `SPECIALIST_IDS`, `REVIEWER_IDS`, `STEP_DEFAULTS`), `agents/*.md`, the [roster table](roster.md), and `tests/agents.test.ts` (exactly 14 `.md` files). Update all of them together.
