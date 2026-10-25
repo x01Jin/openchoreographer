@@ -386,7 +386,7 @@ export default Plugin.define({
       commands: [{
         id: "openchoreographer.settings",
         title: "Choreographer settings",
-        description: "Animations and agent step budgets",
+        description: "Openchoreographer settings panel",
         group: "openchoreographer",
         palette: true,
         slash: { name: "choreographer" },

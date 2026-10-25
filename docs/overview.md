@@ -1,6 +1,6 @@
 # Overview
 
-`openchoreographer` is a read-only orchestrator plus thirteen specialist subagents and a collapsible agent roster for OpenCode V2. The orchestrator plans work, delegates every change to a worker, and verifies the result in the diff. It never edits files or runs shell commands itself.
+For OpenCode V2, `openchoreographer` provides one primary orchestrator and thirteen subagents. The orchestrator plans each task, delegates every edit to a worker, and accepts only what the diff confirms; it never edits files or runs shell itself.
 
 The plugin has two halves that talk only through RPC (`src/shared/rpc.ts`). `index.ts` is the server composition root: it registers tools, hooks, and commands. `tui.tsx` is the TUI composition root: it renders the sidebar and the settings dialog. A settings field must be added on both sides and in the RPC schemas or it is silently dropped.
 

@@ -1,7 +1,7 @@
 {
   "name": "openchoreographer",
   "version": "1.3.0",
-  "description": "Read-only orchestrator, worker and reviewer agents, and a collapsible agent/model sidebar for OpenCode V2.",
+  "description": "A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents that outputs quality without eating too much usage",
   "type": "module",
   "license": "MIT",
   "repository": {

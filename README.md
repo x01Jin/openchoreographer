@@ -1,6 +1,6 @@
 # openchoreographer
 
-A read-only orchestrator, thirteen specialist agents, and a collapsible agent roster for OpenCode V2.
+A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents that outputs quality without eating too much usage
 
 ## Install
 
