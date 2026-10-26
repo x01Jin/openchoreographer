@@ -1,6 +1,6 @@
 {
   "name": "openchoreographer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents that outputs quality without eating too much usage",
   "type": "module",
   "license": "MIT",
