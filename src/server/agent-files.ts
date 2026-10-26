@@ -125,6 +125,22 @@ export function writeAgentSteps(dirs: readonly string[], id: string, value: numb
   writeStepsToPath(path, value)
 }
 
+export function clearAgentSteps(dirs: readonly string[], id: string): boolean {
+  const path = agentStepsPath(dirs, id)
+  if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
+  const content = readFileSync(path, "utf8")
+  const open = content.match(/^---[ \t]*\r?\n/)
+  if (open === null) return false
+  const rest = content.slice(open[0].length)
+  const close = rest.match(/^---[ \t]*\r?(\n|$)/m)
+  if (close === null || close.index === undefined) return false
+  const head = rest.slice(0, close.index)
+  const stripped = head.replace(/^steps:[^\n]*\n?/m, "")
+  if (stripped === head) return false
+  writeFileSync(path, open[0] + stripped + rest.slice(close.index), "utf8")
+  return true
+}
+
 const BACKUP_SUFFIX = ".bak"
 
 type DisableOp = {

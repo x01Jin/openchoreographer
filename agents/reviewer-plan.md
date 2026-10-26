@@ -2,7 +2,6 @@
 description: Read-only review of a draft plan for gaps and risks
 mode: subagent
 color: "#94e2d5"
-steps: 40
 permissions:
   - action: edit
     resource: "*"

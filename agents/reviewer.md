@@ -2,7 +2,6 @@
 description: Strict read-only review of a diff through one lens
 mode: subagent
 color: "#ed8796"
-steps: 40
 permissions:
   - action: edit
     resource: "*"

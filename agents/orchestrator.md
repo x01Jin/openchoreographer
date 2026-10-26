@@ -2,7 +2,6 @@
 description: Plans work, delegates to specialist subagents, and verifies results
 mode: primary
 color: "#f5a97f"
-steps: 90
 permissions:
   - action: edit
     resource: "*"

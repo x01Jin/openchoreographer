@@ -1,10 +1,10 @@
 import { Plugin } from "@opencode/plugin"
-import { AGENT_IDS, STEP_DEFAULTS, SUBAGENT_IDS } from "./src/shared/agents"
+import { AGENT_IDS, SUBAGENT_IDS } from "./src/shared/agents"
 import { chooseModel } from "./src/shared/fallback"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
 import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
-import { agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "./src/server/agent-files"
+import { agentDirs, agentStepsPath, clearAgentSteps, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "./src/server/agent-files"
 import { formatModelRef, resolveFallbacks, resolvePrimary, warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
 import { todoTools } from "./src/server/tools/todos"
@@ -55,7 +55,9 @@ export default Plugin.define({
         storedOk = false
         stored = defaultSettings()
       }
-      // The file is the source of step values and STEP_DEFAULTS is only the reset target, so a step override saved
+      // The file is the source of step values and the bundle defines no step
+      // budgets: a missing `steps:` key means uncapped, and clearing an override
+      // removes the file key instead of restoring a default. A step override saved
       // under the old model is stale and would mask the new defaults. Clear those overrides once; ui and animations survive.
       let settingsVersion: unknown = undefined
       try {
@@ -131,7 +133,7 @@ export default Plugin.define({
           animations: settings.current.animations,
           ui: settings.current.ui,
           steps: { ...fileSteps },
-          defaults: Object.fromEntries(managedIds.map((id) => [id, STEP_DEFAULTS[id] ?? null])),
+          defaults: Object.fromEntries(managedIds.map((id) => [id, null])),
           managed: managedIds,
           models,
           configured: await loadConfigured(),
@@ -157,19 +159,25 @@ export default Plugin.define({
           const patch = (typeof input === "object" && input !== null ? input : undefined) as { steps?: unknown; disabled?: unknown } | undefined
           if (patch !== undefined && patch.steps !== null && typeof patch.steps === "object" && !Array.isArray(patch.steps)) {
             const stepsPatch = patch.steps as Record<string, unknown>
-            const targets: { id: string; path: string; value: number }[] = []
+            const targets: { id: string; path: string; value: number | null }[] = []
             for (const id of managedIds) {
+              if (!Object.prototype.hasOwnProperty.call(stepsPatch, id)) continue
               const raw = stepsPatch[id]
-              const value =
-                raw === null ? STEP_DEFAULTS[id] : typeof raw === "number" ? clampSteps(raw) : undefined
-              if (value === undefined) continue
+              if (raw !== null && (typeof raw !== "number" || !Number.isFinite(raw))) continue
               const path = agentStepsPath(dirs, id)
               if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
-              targets.push({ id, path, value })
+              targets.push({ id, path, value: raw === null ? null : clampSteps(raw) })
             }
             for (const target of targets) {
-              writeAgentSteps(dirs, target.id, target.value)
-              fileSteps[target.id] = target.value
+              if (target.value === null) {
+                // No bundled default exists to restore: clearing removes the file
+                // key so a stepless agent stays stepless.
+                clearAgentSteps(dirs, target.id)
+                delete fileSteps[target.id]
+              } else {
+                writeAgentSteps(dirs, target.id, target.value)
+                fileSteps[target.id] = target.value
+              }
             }
             scheduleReload()
           }
