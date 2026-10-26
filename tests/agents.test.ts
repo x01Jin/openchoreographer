@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, TEAM_IDS, WORKER_IDS } from "../src/shared/agents";
-import { ORCHESTRATOR_RULE_LINES, agentDirs, agentStepsPath, clearAgentSteps, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "../src/server/agent-files";
+import { ORCHESTRATOR_RULE_LINES, agentDirs, disableAgentFile, enableAgentFile, syncAgentFiles, syncOrchestratorRules, syncTeamLines } from "../src/server/agent-files";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -110,34 +110,18 @@ function agentFile(steps: number, body = "Body text."): string {
 }
 
 describe("agent file enable/disable", () => {
-  test("disable moves the file but keeps steps readable and editable", () => {
+  test("disable moves the file but keeps steps readable", () => {
     const dir = makeAgentDir({ "backend.md": agentFile(80) });
     try {
       const dirs = [dir];
       assert.equal(disableAgentFile(dirs, "backend"), true);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(agentStepsPath(dirs, "backend"), path.join(dir, "backend.md.disabled"));
-      assert.equal(readAgentSteps(dirs, "backend"), 80);
-      writeAgentSteps(dirs, "backend", 95);
-      assert.equal(readAgentSteps(dirs, "backend"), 95);
-      assert.ok(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8").includes("steps: 95"));
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8").includes("steps: 80"));
       assert.equal(enableAgentFile(dirs, "backend"), true);
       assert.ok(fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(readAgentSteps(dirs, "backend"), 95);
-    } finally {
-      removeDir(dir);
-    }
-  });
-  test("clearAgentSteps removes the frontmatter steps line and reports whether one existed", () => {
-    const dir = makeAgentDir({ "backend.md": agentFile(80) });
-    try {
-      const dirs = [dir];
-      assert.equal(clearAgentSteps(dirs, "backend"), true);
-      assert.equal(readAgentSteps(dirs, "backend"), null);
-      assert.ok(!/^steps:/m.test(fs.readFileSync(path.join(dir, "backend.md"), "utf8")));
-      assert.equal(clearAgentSteps(dirs, "backend"), false);
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md"), "utf8").includes("steps: 80"));
     } finally {
       removeDir(dir);
     }
@@ -164,7 +148,6 @@ describe("agent file enable/disable", () => {
       assert.ok(content.includes("Normal body."), "new disabled file has the normal content");
       assert.ok(!content.includes("Old disabled body."), "old disabled content is displaced");
       assert.ok(content.includes("steps: 55"), "old disabled steps are preserved");
-      assert.equal(readAgentSteps(dirs, "backend"), 55);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled.bak")), "no .bak remains");
     } finally {
       removeDir(dir);
@@ -189,17 +172,7 @@ describe("agent file enable/disable", () => {
       assert.equal(enableAgentFile(dirs, "backend"), true);
       assert.ok(fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(readAgentSteps(dirs, "backend"), 99);
-    } finally {
-      removeDir(dir);
-    }
-  });
-  test("agentStepsPath prefers the disabled copy when both exist", () => {
-    const dir = makeAgentDir({ "backend.md": agentFile(80), "backend.md.disabled": agentFile(55) });
-    try {
-      const dirs = [dir];
-      assert.equal(agentStepsPath(dirs, "backend"), path.join(dir, "backend.md.disabled"));
-      assert.equal(readAgentSteps(dirs, "backend"), 55);
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md"), "utf8").includes("steps: 99"));
     } finally {
       removeDir(dir);
     }
@@ -213,7 +186,6 @@ describe("agent file enable/disable", () => {
       assert.throws(() => enableAgentFile(dirs, "backend"));
       assert.equal(fs.readFileSync(path.join(dir, "backend.md"), "utf8"), normal);
       assert.equal(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8"), disabled);
-      assert.equal(readAgentSteps(dirs, "backend"), 77);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled.bak")), "no .bak remains");
     } finally {
       removeDir(dir);

@@ -46,7 +46,6 @@ export default Plugin.define({
       })
     }
     const [managed, setManaged] = createSignal<string[]>([])
-    const [defaults, setDefaults] = createSignal<Record<string, number | null>>({})
     const [configured, setConfigured] = createSignal<Record<string, string | null>>({})
     const [subagents, setSubagents] = createSignal<string[]>([])
     const [disabled, setDisabled] = createSignal<string[]>([])
@@ -87,23 +86,10 @@ export default Plugin.define({
     const applySnapshot = (value: unknown) => {
       const snap = normalizeSnapshot(value)
       if (snap === undefined) return
-      const currentSteps = settings.steps
-      const snapSteps = snap.steps
-      const currentKeys = Object.keys(currentSteps)
-      const snapKeys = Object.keys(snapSteps)
-      const stepsSame =
-        currentKeys.length === snapKeys.length &&
-        snapKeys.every((key) => currentSteps[key] === snapSteps[key])
       const currentManaged = managed()
       const managedSame =
         currentManaged.length === snap.managed.length &&
         snap.managed.every((id, index) => currentManaged[index] === id)
-      const currentDefaults = defaults()
-      const defaultKeys = Object.keys(currentDefaults)
-      const snapDefaultKeys = Object.keys(snap.defaults)
-      const defaultsSame =
-        defaultKeys.length === snapDefaultKeys.length &&
-        snapDefaultKeys.every((key) => currentDefaults[key] === snap.defaults[key])
       const animationsSame =
         settings.animations.todo === snap.animations.todo &&
         settings.animations.running === snap.animations.running
@@ -125,17 +111,15 @@ export default Plugin.define({
         snap.disabled.every((id, index) => currentDisabled[index] === id)
       const maxParallelSame = settings.maxParallel === snap.maxParallel
       const routingCheckSame = routingSame(routing(), snap.routing)
-      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame && routingCheckSame) return
+      if (animationsSame && uiSame && managedSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame && routingCheckSame) return
       batch(() => {
         void setSettings((draft) => {
           draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
           draft.ui = { todos: snap.ui.todos, roster: snap.ui.roster }
-          draft.steps = { ...snap.steps }
           draft.models = { primary: { ...snap.models.primary }, fallback: copyFallback(snap.models.fallback) }
           draft.maxParallel = snap.maxParallel
         })
         setManaged([...snap.managed])
-        setDefaults({ ...snap.defaults })
         setConfigured({ ...snap.configured })
         setSubagents([...snap.subagents])
         setDisabled([...snap.disabled])
@@ -225,51 +209,6 @@ export default Plugin.define({
           void syncSettings(false)
         }
       }).finally(settle)
-    }
-
-    let stepsTimer: ReturnType<typeof setTimeout> | undefined
-    const pendingSteps = new Map<string, number | null>()
-    const flushSteps = () => {
-      if (pendingSteps.size === 0) return
-      const payload: Record<string, number | null> = {}
-      for (const [id, value] of pendingSteps) payload[id] = value
-      const before = { ...settings.steps }
-      pendingSteps.clear()
-      if (stepsTimer !== undefined) {
-        clearTimeout(stepsTimer)
-        stepsTimer = undefined
-      }
-      const at = mutation
-      inflight += 1
-      void rpc.setSettings({ steps: payload }, callOptions).then((snap) => {
-        if (at !== mutation) return
-        applySnapshot(snap)
-      }).catch(() => {
-        setOnline(false)
-        context.ui.toast.show({ message: "Could not save steps: server plugin unreachable", variant: "warning" })
-        void setSettings((draft) => {
-          draft.steps = before
-        })
-        void syncSettings(false)
-      }).finally(settle)
-    }
-    const queueSteps = (id: string, value: number | null) => {
-      mutation += 1
-      void setSettings((draft) => {
-        if (value === null) delete draft.steps[id]
-        else draft.steps[id] = value
-      })
-      pendingSteps.set(id, value)
-      if (stepsTimer !== undefined) clearTimeout(stepsTimer)
-      stepsTimer = setTimeout(flushSteps, 200)
-    }
-
-    const saveSteps = (id: string, value: number) => {
-      queueSteps(id, value)
-    }
-
-    const resetSteps = (id: string) => {
-      queueSteps(id, null)
     }
 
     const modelSettings = (): ModelSettings => settings.models ?? { primary: {}, fallback: {} }
@@ -407,14 +346,10 @@ export default Plugin.define({
           context={context}
           settings={settings}
           managed={managed}
-          defaults={defaults}
           online={online}
           agentById={agentById}
-          saveSteps={saveSteps}
-          resetSteps={resetSteps}
           toggleAnimation={toggleAnimation}
           toggleUi={toggleUi}
-          flushSteps={flushSteps}
           saveMaxParallel={saveMaxParallel}
           catalog={models}
           modelSettings={modelSettings}
@@ -659,13 +594,11 @@ export default Plugin.define({
     })
 
     return () => {
-      if (pendingSteps.size > 0) flushSteps()
       unregister()
       offListen()
       disposed = true
       offSettings?.()
       if (timer !== undefined) clearTimeout(timer)
-      if (stepsTimer !== undefined) clearTimeout(stepsTimer)
       if (todoTimer !== undefined) clearInterval(todoTimer)
     }
   },

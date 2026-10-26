@@ -1,10 +1,10 @@
 import type { AgentInfo, ModelInfo } from "@opencode/client"
 import { Plugin } from "@opencode/plugin/tui"
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js"
+import { For, Show, createMemo, createSignal } from "solid-js"
 import type { Store } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
 import type { ScrollBoxRenderable, InputRenderable } from "@opentui/core"
-import { PARALLEL_DEFAULT, PARALLEL_MAX, PARALLEL_MIN, STEPS_STEP, clampSteps } from "../shared/settings"
+import { PARALLEL_DEFAULT, PARALLEL_MAX, PARALLEL_MIN } from "../shared/settings"
 import type { ChoreographerSettings, ModelSettings } from "../shared/settings"
 import { MODEL_GROUPS, ORCHESTRATOR_ID, SUBAGENT_IDS } from "../shared/agents"
 import { FLOW, agentColor, truncate } from "./format"
@@ -25,15 +25,11 @@ type SettingsPanelProps = {
   context: Context
   settings: Store<ChoreographerSettings>
   managed: () => string[]
-  defaults: () => Record<string, number | null>
   online: () => boolean
   agentById: (id: string) => AgentInfo | undefined
-  saveSteps: (id: string, value: number) => void
-  resetSteps: (id: string) => void
   saveMaxParallel: (value: number) => void
   toggleAnimation: (key: "todo" | "running") => void
   toggleUi: (key: "todos" | "roster") => void
-  flushSteps: () => void
   catalog: () => ModelInfo[]
   modelSettings: () => ModelSettings
   configured: () => Record<string, string | null>
@@ -52,7 +48,7 @@ const SECTIONS: Record<SettingsRow["kind"], { title: string; color: string }> = 
   animation: { title: "ANIMATIONS", color: FLOW[0] },
   ui: { title: "INTERFACE", color: FLOW[1] },
   maxParallel: { title: "INTERFACE", color: FLOW[1] },
-  agent: { title: "SUBAGENT TOGGLE AND STEPS", color: "#c6a0f6" },
+  agent: { title: "SUBAGENT TOGGLE", color: "#c6a0f6" },
   primaryModel: { title: "PRIMARY MODELS", color: "#94e2d5" },
   primaryBulk: { title: "PRIMARY MODELS", color: "#94e2d5" },
   fallbackModel: { title: "FALLBACK MODELS", color: "#f5c2e7" },
@@ -101,9 +97,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [picker, setPicker] = createSignal<PickerState | null>(null)
   const [pickerSel, setPickerSel] = createSignal(0)
   const [query, setQuery] = createSignal("")
-  onCleanup(() => {
-    props.flushSteps()
-  })
   let scrollRef: ScrollBoxRenderable | undefined
   let searchRef: InputRenderable | undefined
   let suppressInput = false
@@ -256,10 +249,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
     setPickerSel(sel)
     revealPick(sel)
   }
-  const adjustRow = (id: string, delta: number) => {
-    const effective = props.settings.steps[id] ?? props.defaults()[id] ?? props.agentById(id)?.steps ?? null
-    props.saveSteps(id, clampSteps((effective ?? 0) + delta))
-  }
   const adjustParallel = (delta: number) => {
     const effective = props.settings.maxParallel
     const next = Math.min(PARALLEL_MAX, Math.max(PARALLEL_MIN, effective + delta))
@@ -267,8 +256,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   }
   const adjust = (delta: number) => {
     const row = rows()[current()]
-    if (row?.kind === "agent") adjustRow(row.id, delta * STEPS_STEP)
-    else if (row?.kind === "maxParallel") adjustParallel(delta)
+    if (row?.kind === "maxParallel") adjustParallel(delta)
   }
   const openPicker = (row: SettingsRow, index: number) => {
     if (row.kind !== "primaryModel" && row.kind !== "fallbackModel" && row.kind !== "primaryBulk" && row.kind !== "fallbackBulk") return
@@ -420,8 +408,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   }
   const pressClear = () => {
     const row = rows()[current()]
-    if (row?.kind === "agent") props.resetSteps(row.id)
-    else if (row?.kind === "maxParallel") props.saveMaxParallel(PARALLEL_DEFAULT)
+    if (row?.kind === "maxParallel") props.saveMaxParallel(PARALLEL_DEFAULT)
     else if (row?.kind === "primaryModel") void props.savePrimary([row.id], null)
     else if (row?.kind === "fallbackModel") void props.saveFallback([row.id], null)
     else if (row?.kind === "primaryBulk") {
@@ -581,16 +568,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
       const off = () => !isOrchestrator && props.disabled().includes(row.id)
       const accent = agentColor(props.agentById(row.id), row.id)
       const idColor = () => (off() ? props.context.theme.text.faint : accent)
-      const override = () => props.settings.steps[row.id]
-      const file = () => props.defaults()[row.id]
-      const effective = () => props.settings.steps[row.id] ?? props.defaults()[row.id] ?? props.agentById(row.id)?.steps ?? null
-      const changed = () => override() !== undefined && typeof file() === "number" && file() !== override()
-      const nudge = (delta: number) => (event: { button: number; isDragging?: boolean; stopPropagation: () => void }) => {
-        if (event.button !== 0 || event.isDragging) return
-        event.stopPropagation()
-        select()
-        adjustRow(row.id, delta)
-      }
       const toggleBox = (event: { button: number; isDragging?: boolean; stopPropagation: () => void }) => {
         if (event.button !== 0 || event.isDragging) return
         event.stopPropagation()
@@ -625,24 +602,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
             <Show when={off()}>
               <text fg="#f5a97f" selectable={false}>off</text>
             </Show>
-          </box>
-          <box flexDirection="row" columnGap={1} flexShrink={0}>
-            <Show when={changed()}>
-              <text fg={props.context.theme.text.faint} selectable={false}>{`default ${file()}`}</text>
-            </Show>
-            <box onMouseDown={nudge(-STEPS_STEP)}>
-              <text fg={accent} selectable={false}>−</text>
-            </box>
-            <text
-              fg={accent}
-              attributes={active() ? TextAttributes.BOLD : undefined}
-              selectable={false}
-            >
-              {effective() === null ? "—" : `${effective()}`}
-            </text>
-            <box onMouseDown={nudge(STEPS_STEP)}>
-              <text fg={accent} selectable={false}>+</text>
-            </box>
           </box>
         </box>
       )
@@ -883,8 +842,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </box>
         )}
       >
-        <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>↑↓ move · ←→ ±1/±5 · enter pick · space on/off · r reset · esc close</text>
-        <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>click checkbox toggles · − / + adjusts steps even when off</text>
+        <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>↑↓ move · ←→ adjust · enter pick · space on/off · r reset · esc close</text>
+        <text fg={props.context.theme.text.faint} wrapMode="none" selectable={false}>click checkbox toggles</text>
       </Show>
       <text fg={props.online() ? "#a6e3a1" : "#f5a97f"} selectable={false}>
         {props.online() ? "plugin connected" : "plugin unreachable: local only"}
