@@ -37,7 +37,7 @@ If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the
 | The 14 agents | [docs/roster.md](docs/roster.md) | Full agent table, worker contract, scope routing, step budgets |
 | How work gets delegated | [docs/orchestration.md](docs/orchestration.md) | Operating loop, effort tiers, background subagents, failure handling |
 | Reviews | [docs/reviews.md](docs/reviews.md) | Diff review panel, lenses, plan-stage reviewers, findings format |
-| Models and fallbacks | [docs/models.md](docs/models.md) | Primary precedence, dialog overrides, breaker, retry behavior |
+| Models and fallbacks | [docs/models.md](docs/models.md) | Primary precedence, dialog overrides, failure classes, retry ladder |
 | Sidebar and settings dialog | [docs/ui.md](docs/ui.md) | Roster sections, toggles, step and model rows, picker keys |
 | The diff tool | [docs/diff.md](docs/diff.md) | Parameters, output shape, Risk line, limits, CRLF handling |
 | Todos and fallback status | [docs/tools.md](docs/tools.md) | todowrite, todoread, fallback_status |

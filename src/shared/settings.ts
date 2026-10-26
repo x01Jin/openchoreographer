@@ -19,6 +19,7 @@ export type SettingsSnapshot = {
   subagents: string[]
   disabled: string[]
   maxParallel: number
+  routing: Record<string, { model: string; fallback: boolean }>
 }
 export const STEPS_MIN = 1
 export const STEPS_MAX = 2000
@@ -179,6 +180,21 @@ function normalizeConfigured(value: unknown): Record<string, string | null> {
   return configured
 }
 
+function normalizeRouting(value: unknown): Record<string, { model: string; fallback: boolean }> {
+  const routing: Record<string, { model: string; fallback: boolean }> = {}
+  if (!isRecord(value)) return routing
+  for (const [key, entry] of Object.entries(value)) {
+    if (Object.keys(routing).length >= MODEL_AGENTS_MAX) break
+    if (!validModelKey(key) || !SUBAGENT_SET.has(key)) continue
+    if (!isRecord(entry)) continue
+    const ref = validModelRef(entry.model)
+    if (ref === undefined) continue
+    if (typeof entry.fallback !== "boolean") continue
+    routing[key] = { model: ref, fallback: entry.fallback }
+  }
+  return routing
+}
+
 function defaultSubagents(): string[] {
   return [...SUBAGENT_IDS]
 }
@@ -216,7 +232,8 @@ export function normalizeSnapshot(value: unknown): SettingsSnapshot | undefined 
       : defaultSubagents()
     const disabled = normalizeDisabled(isRecord(value) ? value.disabled : undefined)
     const maxParallel = normalizeMaxParallel(isRecord(value) ? value.maxParallel : undefined)
-    return { animations, ui, steps, defaults, managed, models, configured, subagents, disabled, maxParallel }
+    const routing = normalizeRouting(isRecord(value) ? value.routing : undefined)
+    return { animations, ui, steps, defaults, managed, models, configured, subagents, disabled, maxParallel, routing }
   } catch {
     return undefined
   }

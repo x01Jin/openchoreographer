@@ -1,16 +1,17 @@
 import { Plugin } from "@opencode/plugin"
 import { AGENT_IDS, STEP_DEFAULTS, SUBAGENT_IDS } from "./src/shared/agents"
+import { chooseModel } from "./src/shared/fallback"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
 import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
 import { agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "./src/server/agent-files"
-import { warnNarrowFallbacks } from "./src/server/models"
+import { formatModelRef, resolveFallbacks, resolvePrimary, warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
 import { todoTools } from "./src/server/tools/todos"
 import { fallbackStatusTool } from "./src/server/tools/fallback-status"
 import { commands } from "./src/server/commands"
 import { contextHook } from "./src/server/context"
-import { breaker, resetFallbackWrapper, retryHook, subagentAfterHook, subagentBeforeHook, subagentTransform } from "./src/server/fallback"
+import { health, onHealthChange, retryHook, subagentAfterHook, subagentBeforeHook, subagentTransform } from "./src/server/fallback"
 import { outputClipHook } from "./src/server/output"
 
 type Registration = { dispose: () => Promise<void> }
@@ -22,7 +23,6 @@ export default Plugin.define({
   id: "openchoreographer",
   async setup(ctx) {
     const generation = ++epoch
-    resetFallbackWrapper()
     const previous = active
     active = []
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
@@ -119,6 +119,14 @@ export default Plugin.define({
           primary: { ...settings.current.models.primary },
           fallback: Object.fromEntries(Object.entries(settings.current.models.fallback).map(([id, refs]) => [id, [...refs]])),
         }
+        const overrides = settings.current.models
+        const routing: Record<string, { model: string; fallback: boolean }> = {}
+        for (const id of subagents) {
+          const primary = await resolvePrimary(ctx, id, overrides)
+          const fallbacks = resolveFallbacks(id, overrides)
+          const choice = chooseModel({ primary, alternates: fallbacks, available: (m) => !health.down(m) })
+          if (choice.model !== undefined) routing[id] = { model: formatModelRef(choice.model), fallback: choice.fellBack }
+        }
         return {
           animations: settings.current.animations,
           ui: settings.current.ui,
@@ -130,6 +138,7 @@ export default Plugin.define({
           subagents: [...subagents],
           disabled: [...settings.current.disabled],
           maxParallel: settings.current.maxParallel,
+          routing,
         }
       }
       let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
@@ -220,9 +229,64 @@ export default Plugin.define({
           if (emitUpdated) await emitUpdated(snap)
           return snap
         },
+        resetModel: async (input) => {
+          const agent = (typeof input === "object" && input !== null ? (input as { agent?: unknown }).agent : undefined)
+          if (typeof agent !== "string" || !SUBAGENT_IDS.includes(agent)) throw new Error("openchoreographer: unknown subagent")
+          const overrides = settings.current.models
+          const primary = await resolvePrimary(ctx, agent, overrides)
+          const fallbacks = resolveFallbacks(agent, overrides)
+          health.reset([...(primary === undefined ? [] : [primary]), ...fallbacks])
+          const snap = await snapshot()
+          if (emitUpdated) await emitUpdated(snap)
+          return snap
+        },
       })
       registrations.push(rpc)
       emitUpdated = (snap) => rpc.events.emit("updated", snap)
+      let healthTimer: ReturnType<typeof setTimeout> | undefined
+      let expiryTimer: ReturnType<typeof setTimeout> | undefined
+      const clearExpiryTimer = () => {
+        if (expiryTimer !== undefined) {
+          clearTimeout(expiryTimer)
+          expiryTimer = undefined
+        }
+      }
+      const scheduleExpiryRefresh = () => {
+        clearExpiryTimer()
+        let wait = 0
+        try {
+          for (const row of health.snapshot()) {
+            if (row.waitMs > wait) wait = row.waitMs
+          }
+        } catch (error) {
+          console.warn(`openchoreographer: routing refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+        if (wait <= 0) return
+        expiryTimer = setTimeout(() => {
+          expiryTimer = undefined
+          if (disposed) return
+          void snapshot()
+            .then((snap) => rpc.events.emit("updated", snap))
+            .then(() => {
+              scheduleExpiryRefresh()
+            })
+            .catch((error) => console.warn(`openchoreographer: routing refresh failed: ${error instanceof Error ? error.message : String(error)}`))
+        }, wait + 250)
+      }
+      onHealthChange(() => {
+        if (healthTimer !== undefined) return
+        healthTimer = setTimeout(() => {
+          healthTimer = undefined
+          if (disposed) return
+          void snapshot()
+            .then((snap) => rpc.events.emit("updated", snap))
+            .then(() => {
+              scheduleExpiryRefresh()
+            })
+            .catch((error) => console.warn(`openchoreographer: routing refresh failed: ${error instanceof Error ? error.message : String(error)}`))
+        }, 100)
+      })
       registrations.push(await retryHook(ctx, getModels))
 
       registrations.push(await subagentBeforeHook(ctx, getModels, getDisabled))
@@ -251,7 +315,7 @@ export default Plugin.define({
 
       registrations.push(await todoTools(ctx))
 
-      registrations.push(await fallbackStatusTool(ctx, breaker, getModels))
+      registrations.push(await fallbackStatusTool(ctx, health, getModels))
 
       registrations.push(await commands(ctx, options, getDisabled))
 
@@ -260,6 +324,11 @@ export default Plugin.define({
       if (generation !== epoch) {
         const stale = [...registrations].reverse()
         registrations.length = 0
+        if (healthTimer !== undefined) {
+          clearTimeout(healthTimer)
+          healthTimer = undefined
+        }
+        clearExpiryTimer()
         await Promise.allSettled(stale.map((registration) => registration.dispose()))
         return
       }
@@ -270,6 +339,11 @@ export default Plugin.define({
           clearTimeout(reloadTimer)
           reloadTimer = undefined
         }
+        if (healthTimer !== undefined) {
+          clearTimeout(healthTimer)
+          healthTimer = undefined
+        }
+        clearExpiryTimer()
         const pending = [...registrations].reverse()
         registrations.length = 0
         if (active === registrations) {

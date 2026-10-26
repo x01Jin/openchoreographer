@@ -56,6 +56,19 @@ const disabledSchema = {
   maxItems: 32,
 } as const
 
+const routingSchema = {
+  type: "object",
+  additionalProperties: {
+    type: "object",
+    properties: {
+      model: { type: "string" },
+      fallback: { type: "boolean" },
+    },
+    required: ["model", "fallback"],
+    additionalProperties: false,
+  },
+} as const
+
 const snapshotSchema = {
   type: "object",
   properties: {
@@ -69,8 +82,9 @@ const snapshotSchema = {
     subagents: subagentsSchema,
     disabled: disabledSchema,
     maxParallel: { type: "integer", minimum: 1, maximum: 8 },
+    routing: routingSchema,
   },
-  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents", "disabled", "maxParallel"],
+  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents", "disabled", "maxParallel", "routing"],
   additionalProperties: false,
 } as const
 
@@ -121,8 +135,20 @@ const setSettings = {
 
 const updated = { schema: snapshotSchema } as const
 
+const resetModel = {
+  input: {
+    type: "object",
+    properties: {
+      agent: { type: "string", maxLength: 64 },
+    },
+    required: ["agent"],
+    additionalProperties: false,
+  },
+  output: snapshotSchema,
+} as const
+
 export const ChoreographerRpc = Rpc.define({
   id: "openchoreographer",
-  methods: { getSettings, setSettings },
+  methods: { getSettings, setSettings, resetModel },
   events: { updated },
 })

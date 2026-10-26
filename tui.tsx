@@ -50,6 +50,9 @@ export default Plugin.define({
     const [configured, setConfigured] = createSignal<Record<string, string | null>>({})
     const [subagents, setSubagents] = createSignal<string[]>([])
     const [disabled, setDisabled] = createSignal<string[]>([])
+    const [routing, setRouting] = createSignal<Record<string, { model: string; fallback: boolean }>>({})
+    const [switchArmed, setSwitchArmed] = createSignal<{ session: string; agent: string } | undefined>(undefined)
+    const [switchBusyMap, setSwitchBusyMap] = createSignal<Record<string, boolean>>({})
     const [online, setOnline] = createSignal(true)
     let inflight = 0
     let mutation = 0
@@ -70,6 +73,10 @@ export default Plugin.define({
         const right = b[key] ?? []
         return left.length === right.length && right.every((value, index) => left[index] === value)
       })
+    }
+    const routingSame = (a: Record<string, { model: string; fallback: boolean }>, b: Record<string, { model: string; fallback: boolean }>): boolean => {
+      const keys = Object.keys(b)
+      return Object.keys(a).length === keys.length && keys.every((key) => a[key]?.model === b[key].model && a[key]?.fallback === b[key].fallback)
     }
     const copyFallback = (value: Record<string, string[]>): Record<string, string[]> => {
       const copy: Record<string, string[]> = {}
@@ -117,7 +124,8 @@ export default Plugin.define({
         currentDisabled.length === snap.disabled.length &&
         snap.disabled.every((id, index) => currentDisabled[index] === id)
       const maxParallelSame = settings.maxParallel === snap.maxParallel
-      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame) return
+      const routingCheckSame = routingSame(routing(), snap.routing)
+      if (animationsSame && uiSame && stepsSame && managedSame && defaultsSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame && routingCheckSame) return
       batch(() => {
         void setSettings((draft) => {
           draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
@@ -131,6 +139,7 @@ export default Plugin.define({
         setConfigured({ ...snap.configured })
         setSubagents([...snap.subagents])
         setDisabled([...snap.disabled])
+        setRouting({ ...snap.routing })
         bump()
       })
     }
@@ -352,6 +361,44 @@ export default Plugin.define({
       }).finally(settle)
     }
 
+    const isSwitchPending = (agent: AgentInfo): boolean => {
+      const armed = switchArmed()
+      return armed !== undefined && armed.session === currentSession() && armed.agent === agent.id
+    }
+
+    const isSwitchBusy = (agent: AgentInfo): boolean => switchBusyMap()[agent.id] === true
+
+    const requestSwitch = (id: string): void => {
+      const session = currentSession()
+      if (session === undefined) return
+      if (switchBusyMap()[id] === true) return
+      const armed = switchArmed()
+      if (armed === undefined || armed.session !== session || armed.agent !== id) {
+        setSwitchArmed({ session, agent: id })
+        return
+      }
+      mutation += 1
+      const at = mutation
+      setSwitchArmed(undefined)
+      setSwitchBusyMap((state) => ({ ...state, [id]: true }))
+      inflight += 1
+      void rpc.resetModel({ agent: id }, callOptions).then((snap) => {
+        if (at === mutation) applySnapshot(snap)
+      }).catch(() => {
+        setOnline(false)
+        context.ui.toast.show({ message: "Could not restore primary model: server plugin unreachable", variant: "warning" })
+        void syncSettings(false)
+      }).finally(() => {
+        setSwitchBusyMap((state) => {
+          if (state[id] !== true) return state
+          const next = { ...state }
+          delete next[id]
+          return next
+        })
+        settle()
+      })
+    }
+
     const openSettings = () => {
       if (inflight === 0) void syncSettings(false)
       context.ui.dialog.set({ size: "large", centered: true })
@@ -433,10 +480,17 @@ export default Plugin.define({
     const toggle = (sessionID: string, section: Section) => {
       const next = !isOpen(sessionID, section)
       setOpen((state) => ({ ...state, [sessionID]: { ...(state[sessionID] ?? DEFAULT_OPEN), [section]: next } }))
+      setSwitchArmed(undefined)
     }
 
     const activeModel = (agent: AgentInfo, sessionID: string): string => {
       dataVersion()
+      const routed = routing()[agent.id]
+      if (routed !== undefined) {
+        const parsed = parseModel(routed.model)
+        if (parsed === undefined) return routed.model
+        return modelName({ providerID: parsed.providerID, id: parsed.modelID, variant: parsed.variant }, modelIndex())
+      }
       const session = context.data.session.get(sessionID)
       if (session?.agent === agent.id && session.model) return modelName(session.model, modelIndex())
       const override = modelSettings().primary[agent.id]
@@ -447,6 +501,8 @@ export default Plugin.define({
       }
       return agent.model ? modelName(agent.model, modelIndex()) : "inherit"
     }
+
+    const fallbackModel = (agent: AgentInfo): boolean => routing()[agent.id]?.fallback === true
 
     const running = (): SessionInfo[] => {
       dataVersion()
@@ -562,7 +618,10 @@ export default Plugin.define({
     const unregister = context.ui.slot({
       append: "sidebar.content",
       render: ({ sessionID }) => {
-        if (currentSession() !== sessionID) setCurrentSession(sessionID)
+        if (currentSession() !== sessionID) {
+          setCurrentSession(sessionID)
+          setSwitchArmed(undefined)
+        }
         if (todoAnimFor() !== sessionID) setTodoAnimFor(sessionID)
         return (
           <Sidebar
@@ -579,6 +638,10 @@ export default Plugin.define({
             run={run}
             modelIndex={modelIndex}
             activeModel={(agent) => activeModel(agent, sessionID)}
+            fallbackModel={fallbackModel}
+            switchPending={isSwitchPending}
+            switchBusy={isSwitchBusy}
+            requestSwitch={requestSwitch}
             todoItems={() => todoItems(sessionID)}
             todoDone={() => todoDone(sessionID)}
             todoPhase={todoPhase}

@@ -139,7 +139,6 @@ type DisableOp = {
 
 function restoreDisableOp(op: DisableOp): void {
   if (!op.hadDisabled) {
-    // The normal file was the only copy: move it back when it vanished.
     try {
       if (!exists(op.normalPath) && exists(op.disabledPath)) renameSync(op.disabledPath, op.normalPath)
     } catch {
@@ -164,7 +163,6 @@ function restoreDisableOp(op: DisableOp): void {
     }
     return
   }
-  // No backup left (a completed op): rewrite both originals from buffers.
   try {
     writeFileSync(op.normalPath, op.normalContent, "utf8")
   } catch {
@@ -267,7 +265,6 @@ type EnableOp = {
 
 function restoreEnableOp(op: EnableOp): void {
   if (!op.hadNormal) {
-    // The disabled file was the only copy: move it back when it vanished.
     try {
       if (!exists(op.disabledPath) && exists(op.normalPath)) renameSync(op.normalPath, op.disabledPath)
     } catch {
@@ -291,7 +288,6 @@ function restoreEnableOp(op: EnableOp): void {
     }
     return
   }
-  // No backup left (a completed op): rewrite both originals from buffers.
   try {
     if (op.normalContent !== null) writeFileSync(op.normalPath, op.normalContent, "utf8")
   } catch {

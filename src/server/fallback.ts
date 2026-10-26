@@ -1,29 +1,41 @@
 import type { Plugin } from "@opencode/plugin"
-import { chooseModel, createBreaker, isChildQuotaFailure, isQuotaError, parseModel, planResultFallback, planRetriedResult } from "../shared/fallback"
+import { chooseModel, classifyFailure, createModelHealth, FALLBACK_WINDOW_MS, isChildFailure, isChildQuotaFailure, parseModel, planRetriedResult, planRetryDecision } from "../shared/fallback"
 import { clipResultStats } from "../shared/results"
 import type { ModelSettings } from "../shared/settings"
 import { formatModelRef, resolveFallbacks, resolvePrimary } from "./models"
 import { changedFiles, changedTreeError, readTree, treeKey } from "./tree"
 
-const breaker = createBreaker({ initialMs: 5 * 60_000, maxMs: 60 * 60_000 })
-let wrapperInstalled = false
+let healthListener: (() => void) | undefined
 
-export function resetFallbackWrapper(): void {
-  wrapperInstalled = false
+export function onHealthChange(fn: () => void): void {
+  healthListener = fn
 }
 
-export { breaker }
+export const health = createModelHealth({
+  windowMs: FALLBACK_WINDOW_MS,
+  onChange: () => {
+    healthListener?.()
+  },
+})
 
 export function retryHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.session.hook("retry", (event) => {
-    if (!isQuotaError(event.error)) return
-    // The host Model.Ref splits provider and id, so rejoin them for breaker accounting.
+    const alternates = resolveFallbacks(event.agent, getModels())
+    // An agent without configured fallbacks keeps the host behavior untouched.
+    if (alternates.length === 0) return
+    // The host Model.Ref splits provider and id, so rejoin them for health accounting.
     const current = parseModel(event.model.providerID + "/" + event.model.id + (event.model.variant ? "#" + event.model.variant : ""))
     if (current === undefined) return
-    breaker.fail(current, { retryAfterMs: event.error.retryAfterMs })
-    const alternates = resolveFallbacks(event.agent, getModels())
-    // Only suppress the host retry when the wrapper can actually route to a fallback.
-    if (alternates !== undefined && alternates.length > 0 && wrapperInstalled) event.decision = { retry: false }
+    const plan = planRetryDecision({ error: event.error, attempt: event.attempt, degraded: health.degraded(current), hasFallback: true })
+    if (plan.kind === "retry") {
+      health.degrade(current)
+      event.decision = { retry: true, delay: plan.delayMs }
+    } else if (plan.kind === "fallback") {
+      health.fail(current, plan.mark)
+      event.decision = { retry: false }
+    } else {
+      event.decision = { retry: false }
+    }
   })
 }
 
@@ -42,15 +54,15 @@ export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSe
     const raw = record.model
     const requested = typeof raw === "string" ? parseModel(raw) : undefined
     if (requested !== undefined) {
-      if (breaker.available(requested)) return
-      const choice = chooseModel({ primary: requested, alternates, available: (m) => breaker.available(m) })
+      if (!health.down(requested)) return
+      const choice = chooseModel({ primary: requested, alternates, available: (m) => !health.down(m) })
       if (choice.model !== undefined && choice.fellBack) {
         record.model = formatModelRef(choice.model)
       }
       return
     }
     if (configured === undefined) return
-    const choice = chooseModel({ primary: configured, alternates, available: (m) => breaker.available(m) })
+    const choice = chooseModel({ primary: configured, alternates, available: (m) => !health.down(m) })
     if (choice.model === undefined) return
     if (choice.fellBack) {
       record.model = formatModelRef(choice.model)
@@ -97,6 +109,10 @@ export function subagentAfterHook(ctx: Plugin.Context) {
   })
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings, getDisabled: () => readonly string[] = () => []) {
   return ctx.tool.transform((editor) => {
     const target = editor.get("subagent")
@@ -135,23 +151,14 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
           }
           const result = await original(spawn, context)
           const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
-          const plan = planResultFallback({
-            result,
-            actual,
-            alternates: alternatesForAgent,
-            available: (m) => breaker.available(m),
-            aborted: context.signal.aborted,
-          })
-          if (plan.kind === "return") {
-            if (plan.credit !== undefined) breaker.succeed(plan.credit, startedAt)
-            else if (actual !== undefined && isChildQuotaFailure(result)) breaker.fail(actual)
-            return result
-          }
-          if (agent !== undefined) {
-            const alternates = alternatesForAgent
-            if (alternates.length > 0) {
-              if (plan.fail !== undefined) breaker.fail(plan.fail)
-              const alternate = plan.model
+          const aborted = context.signal.aborted
+          const failedResult = !aborted && isChildFailure(result)
+          const quota = failedResult && isChildQuotaFailure(result)
+          if (quota && actual !== undefined) health.fail(actual, "quota")
+          if (failedResult && actual !== undefined && health.down(actual) && alternatesForAgent.length > 0) {
+            const candidates = alternatesForAgent.filter((m) => m.key !== actual.key)
+            if (candidates.length > 0) {
+              const alternate = candidates.find((m) => !health.down(m)) ?? candidates[candidates.length - 1]
               if (baseline !== undefined) {
                 const current = await readTree(ctx, true)
                 if (current !== undefined) {
@@ -164,33 +171,35 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
               try {
                 const retried = await original({ ...fields, model: next }, context)
                 const settled = planRetriedResult({ result: retried, alternate })
-                if (settled.fail !== undefined) breaker.fail(settled.fail)
-                if (settled.credit !== undefined) breaker.succeed(settled.credit, startedAt)
+                if (settled.fail !== undefined) health.fail(settled.fail, "quota")
+                if (settled.credit !== undefined) health.succeed(settled.credit, startedAt)
                 return retried
               } catch (retryError) {
-                breaker.fail(alternate)
+                const retryKind = classifyFailure({ message: errorMessage(retryError) })
+                if (retryKind !== "fatal") health.fail(alternate, retryKind === "quota" ? "quota" : "retries")
                 throw retryError
               }
             }
           }
+          if (!aborted && !failedResult && actual !== undefined) health.succeed(actual, startedAt)
           return result
         } catch (error) {
           if (agent !== undefined && getDisabled().includes(agent)) throw error
           // A cancelled child is not a provider failure; retrying would ignore the abort.
           if (context.signal.aborted) throw error
-          const message = error instanceof Error ? error.message : String(error)
+          const message = errorMessage(error)
           if (/abort|cancel/i.test(message)) throw error
           if (agent === undefined) throw error
-          const alternates = alternatesForAgent
           const actual = typeof fields.model === "string" ? parseModel(fields.model) : used
           const failed = actual ?? used
-          if (failed === undefined || alternates === undefined || alternates.length === 0) throw error
-          if (!isQuotaError({ message }) && breaker.available(failed)) throw error
-          breaker.fail(failed)
-          const choice = chooseModel({ primary: failed, alternates, available: (m) => breaker.available(m) })
+          if (failed === undefined || alternatesForAgent.length === 0) throw error
+          const kind = classifyFailure({ message })
+          if (kind === "fatal") throw error
+          health.fail(failed, kind === "quota" ? "quota" : "retries")
+          const choice = chooseModel({ primary: failed, alternates: alternatesForAgent, available: (m) => !health.down(m) })
           if (!choice.fellBack || choice.model === undefined) throw error
-          // Never resend the model that just failed, and never route to an exhausted one.
-          if (choice.model.key === failed.key || !breaker.available(choice.model)) throw error
+          // Never resend the model that just failed; the choice may be the last resort even when exhausted.
+          if (choice.model.key === failed.key) throw error
           // Do not pay twice for a failed spawn; a tree we could not read either time retries exactly as before.
           if (baseline !== undefined) {
             const current = await readTree(ctx, true)
@@ -203,15 +212,15 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
           if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
           try {
             const result = await original({ ...fields, model: alternate }, context)
-            breaker.succeed(choice.model, startedAt)
+            health.succeed(choice.model, startedAt)
             return result
           } catch (retryError) {
-            breaker.fail(choice.model)
+            const retryKind = classifyFailure({ message: errorMessage(retryError) })
+            if (retryKind !== "fatal") health.fail(choice.model, retryKind === "quota" ? "quota" : "retries")
             throw retryError
           }
         }
       }
     })
-    wrapperInstalled = true
   })
 }

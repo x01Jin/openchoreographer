@@ -137,6 +137,7 @@ describe("normalizeSnapshot", () => {
         subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
         disabled: [],
         maxParallel: 4,
+        routing: {},
       },
     )
   })
@@ -214,6 +215,7 @@ describe("normalizeSnapshot", () => {
       subagents: ["explore", "backend", "frontend", "database", "devops", "tester", "designer", "writer", "reviewer", "reviewer-security", "reviewer-plan", "reviewer-execution", "reviewer-scope"],
       disabled: [],
       maxParallel: 4,
+      routing: {},
     })
   })
 
@@ -560,4 +562,67 @@ describe("normalizeSnapshot maxParallel", () => {
       assert.equal(snap?.maxParallel, 4)
     }
   })
+})
+
+describe("normalizeSnapshot routing", () => {
+  function base(routing: unknown) {
+    return {
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+      routing,
+    };
+  }
+
+  test("defaults a missing routing to {}", () => {
+    const snap = normalizeSnapshot({
+      animations: { todo: true, running: true },
+      steps: {},
+      defaults: {},
+      managed: [],
+    });
+    assert.deepEqual(snap?.routing, {});
+  });
+
+  test("keeps valid entries including variants", () => {
+    const snap = normalizeSnapshot(base({
+      backend: { model: "anthropic/claude-sonnet-4", fallback: true },
+      frontend: { model: "openai/gpt-5#high", fallback: false },
+    }));
+    assert.deepEqual(snap?.routing, {
+      backend: { model: "anthropic/claude-sonnet-4", fallback: true },
+      frontend: { model: "openai/gpt-5#high", fallback: false },
+    });
+  });
+
+  test("drops malformed entries and keeps the valid ones", () => {
+    const snap = normalizeSnapshot(base({
+      backend: { model: "a/b", fallback: true },
+      orchestrator: { model: "a/b", fallback: false },
+      bogus: { model: "a/b", fallback: false },
+      explore: { model: "bad", fallback: true },
+      frontend: { model: "a/b", fallback: "yes" },
+      database: { model: "a/b" },
+      devops: "a/b",
+      tester: null,
+      writer: { model: "", fallback: false },
+    }));
+    assert.deepEqual(snap?.routing, {
+      backend: { model: "a/b", fallback: true },
+    });
+  });
+
+  test("drops __proto__, constructor, and prototype routing entries", () => {
+    const parsed = JSON.parse('{"animations":{"todo":true,"running":true},"steps":{},"defaults":{},"managed":[],"routing":{"__proto__":{"model":"a/b","fallback":true},"constructor":{"model":"a/b","fallback":true},"prototype":{"model":"a/b","fallback":true},"backend":{"model":"a/b","fallback":false}}}');
+    assert.deepEqual(normalizeSnapshot(parsed)?.routing, {
+      backend: { model: "a/b", fallback: false },
+    });
+  });
+
+  test("a non-object routing resets to {}", () => {
+    for (const invalid of [null, 42, "a/b", [{ model: "a/b", fallback: true }]]) {
+      assert.deepEqual(normalizeSnapshot(base(invalid))?.routing, {}, JSON.stringify(invalid));
+    }
+  });
 })

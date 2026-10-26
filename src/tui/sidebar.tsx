@@ -5,10 +5,19 @@ import type { Store } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
 import type { ChoreographerSettings } from "../shared/settings"
 import { FLOW, MODEL_WIDTH, NAME_WIDTH, TODO_LIMIT, agentColor, hueHex, modelName, truncate } from "./format"
+import { displayWidth } from "../shared/text"
 import type { Section, TodoItem } from "./format"
 import { FlowingLabel } from "./flowing-label"
 
 type Context = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
+
+const FALLBACK_FG = "#f5a97f"
+
+const padStartCells = (value: string, width: number): string => {
+  let used = 0
+  for (const char of value) used += displayWidth(char)
+  return used >= width ? value : `${" ".repeat(width - used)}${value}`
+}
 
 export type SidebarProps = {
   context: Context
@@ -24,6 +33,10 @@ export type SidebarProps = {
   run: () => SessionInfo[]
   modelIndex: () => Map<string, string>
   activeModel: (agent: AgentInfo) => string
+  fallbackModel: (agent: AgentInfo) => boolean
+  switchPending: (agent: AgentInfo) => boolean
+  switchBusy: (agent: AgentInfo) => boolean
+  requestSwitch: (agentId: string) => void
   todoItems: () => TodoItem[]
   todoDone: () => number
   todoPhase: () => number
@@ -55,6 +68,20 @@ export function Sidebar(props: SidebarProps) {
       props.dataVersion()
       return props.context.data.session.get(sessionID)?.agent === agent.id
     }
+    const isFallback = () => props.fallbackModel(agent)
+    const pending = () => props.switchPending(agent)
+    const busy = () => props.switchBusy(agent)
+    const confirming = () => isFallback() && pending() && !busy()
+    const modelText = () => {
+      if (!isFallback()) return truncate(props.activeModel(agent), MODEL_WIDTH)
+      if (confirming()) return "switch primary?"
+      return padStartCells(`↳ ${truncate(props.activeModel(agent), MODEL_WIDTH - 2)}`, MODEL_WIDTH)
+    }
+    const modelFg = () => {
+      if (confirming()) return props.context.theme.text.base
+      if (isFallback()) return FALLBACK_FG
+      return active() ? props.context.theme.text.muted : props.context.theme.text.faint
+    }
     return (
       <box flexDirection="row" width="100%" justifyContent="space-between" columnGap={1}>
         <box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden">
@@ -65,9 +92,16 @@ export function Sidebar(props: SidebarProps) {
             {truncate(agent.name, NAME_WIDTH)}
           </text>
         </box>
-        <box flexShrink={0}>
-          <text wrapMode="none" fg={active() ? props.context.theme.text.muted : props.context.theme.text.faint} selectable={false}>
-            {truncate(props.activeModel(agent), MODEL_WIDTH)}
+        <box
+          flexShrink={0}
+          onMouseDown={isFallback() && !busy() ? (event) => {
+            if (event.button !== 0 || event.isDragging) return
+            event.stopPropagation()
+            props.requestSwitch(agent.id)
+          } : undefined}
+        >
+          <text wrapMode="none" fg={modelFg()} attributes={confirming() ? TextAttributes.BOLD : undefined} selectable={false}>
+            {modelText()}
           </text>
         </box>
       </box>

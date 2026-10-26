@@ -19,88 +19,133 @@ export function parseModel(value: unknown): ParsedModel | undefined {
   return variant === undefined ? { providerID, modelID, key } : { providerID, modelID, variant, key }
 }
 
-const QUOTA_PHRASES: readonly string[] = [
-  "rate limit",
-  "ratelimit",
-  "too many requests",
-  "quota exceeded",
-  "quota limit",
-  "insufficient quota",
-  "insufficient credit",
-  "insufficient balance",
-  "usage limit",
-  "monthly limit",
-  "free tier",
-  "free plan",
-]
+export type FailureKind = "quota" | "retryable" | "fatal"
 
-export function isQuotaError(error: { status?: number; message?: string }): boolean {
-  if (error === undefined || error === null) return false
-  if (error.status === 429 || error.status === 402) return true
-  // A concrete status that is not a quota status is authoritative; its message must not override it.
-  if (typeof error.status === "number") return false
-  if (typeof error.message !== "string") return false
-  // Provider error codes use underscores ("insufficient_quota"), prose uses spaces.
-  const text = error.message.toLowerCase().replace(/_/g, " ")
-  return QUOTA_PHRASES.some((phrase) => text.includes(phrase))
+export type FailureInput = {
+  readonly type?: string
+  readonly status?: number
+  readonly message?: string
+  readonly retryAfterMs?: number
+} | undefined
+
+const QUOTA_MESSAGE = /free usage limit|free usage exceeded|usage limit|usage exceeded|subscribe to opencode go|quota|insufficient (quota|credit|balance)|payment required|billing|out of credits|monthly limit|free tier|free plan/
+const FATAL_TYPE = /invalid|bad[-_. ]?request|unsupported/i
+const FATAL_MESSAGE = /not (currently )?supported|unsupported|invalid request/
+const RETRYABLE_MESSAGE = /rate limit|too many requests|timed? ?out|timeout|econnreset|econnrefused|socket hang up|fetch failed|network|overloaded|temporarily unavailable/
+
+export function classifyFailure(error: FailureInput): FailureKind {
+  if (error === undefined || error === null) return "retryable"
+  const message = typeof error.message === "string" ? error.message.toLowerCase().replace(/_/g, " ") : ""
+  if (message.length > 0 && QUOTA_MESSAGE.test(message)) return "quota"
+  if (error.status === 402) return "quota"
+  if (typeof error.type === "string" && FATAL_TYPE.test(error.type)) return "fatal"
+  if (message.length > 0 && FATAL_MESSAGE.test(message)) return "fatal"
+  if (typeof error.status === "number" && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) return "fatal"
+  if (typeof error.status === "number" && (error.status === 408 || error.status === 429 || error.status >= 500)) return "retryable"
+  if (message.length > 0 && RETRYABLE_MESSAGE.test(message)) return "retryable"
+  return "retryable"
 }
 
-type BreakerOptions = { readonly initialMs: number; readonly maxMs: number; readonly now?: () => number }
+export type RetryPlan =
+  | { readonly kind: "retry"; readonly delayMs: number; readonly degrade: boolean }
+  | { readonly kind: "fallback"; readonly mark: "quota" | "retries" }
+  | { readonly kind: "surface" }
 
-export type Breaker = {
-  fail(model: ParsedModel, options?: { retryAfterMs?: number }): number
-  succeed(model: ParsedModel, since?: number): void
-  available(model: ParsedModel): boolean
+export function planRetryDecision(input: {
+  readonly error: FailureInput
+  readonly attempt: number
+  readonly degraded: boolean
+  readonly hasFallback: boolean
+}): RetryPlan {
+  if (!input.hasFallback) return { kind: "surface" }
+  const kind = classifyFailure(input.error)
+  if (kind === "quota") return { kind: "fallback", mark: "quota" }
+  if (kind === "fatal") return { kind: "surface" }
+  if (input.degraded) return { kind: "fallback", mark: "retries" }
+  if (input.attempt >= 3) return { kind: "fallback", mark: "retries" }
+  const hint = input.error !== undefined && input.error !== null ? input.error.retryAfterMs : undefined
+  const base = typeof hint === "number" && Number.isFinite(hint) ? hint : 1000 * input.attempt
+  return { kind: "retry", delayMs: Math.min(Math.max(base, 0), 15000), degrade: true }
+}
+
+export const FALLBACK_WINDOW_MS = 300_000
+
+export type HealthReason = "quota" | "retries"
+
+type ModelHealthOptions = { readonly windowMs: number; readonly now?: () => number; readonly onChange?: () => void }
+
+export type ModelHealth = {
+  down(model: ParsedModel): boolean
   waitMs(model: ParsedModel): number
-  snapshot(): ReadonlyArray<{ model: string; waitMs: number }>
+  reason(model: ParsedModel): HealthReason | undefined
+  degraded(model: ParsedModel): boolean
+  fail(model: ParsedModel, reason: HealthReason): void
+  degrade(model: ParsedModel): void
+  succeed(model: ParsedModel, since?: number): void
+  reset(models: readonly ParsedModel[]): void
+  snapshot(): ReadonlyArray<{ model: string; reason: HealthReason; waitMs: number; degraded: boolean }>
 }
 
-type Entry = { until: number; backoff: number; since: number }
+type HealthEntry = { until: number; reason?: HealthReason; degradedSince?: number }
 
-export function createBreaker(options: BreakerOptions): Breaker {
-  const initialMs = options.initialMs
-  const maxMs = options.maxMs
+export function createModelHealth(options: ModelHealthOptions): ModelHealth {
+  const windowMs = options.windowMs
   const clock = options.now ?? Date.now
-  const entries = new Map<string, Entry>()
+  const onChange = options.onChange
+  const entries = new Map<string, HealthEntry>()
+  const notify = () => {
+    if (onChange !== undefined) onChange()
+  }
   return {
-    fail(model, retry) {
-      const at = clock()
-      const hint = retry?.retryAfterMs
-      const retryAfterMs = Number.isFinite(hint) && (hint as number) > 0 ? (hint as number) : undefined
-      const current = entries.get(model.key)
-      if (current !== undefined && at < current.until) {
-        const wait = Math.min(Math.max(retryAfterMs ?? current.backoff, current.backoff), maxMs)
-        const candidate = at + wait
-        if (candidate > current.until) current.until = candidate
-        // The latest failure re-opens the window, so only successes started after it may clear the entry.
-        current.since = at
-        return wait
-      }
-      const backoff = current === undefined ? initialMs : Math.min(current.backoff * 2, maxMs)
-      const wait = Math.min(Math.max(retryAfterMs ?? backoff, backoff), maxMs)
-      entries.set(model.key, { until: at + wait, backoff, since: at })
-      return wait
-    },
-    succeed(model, since) {
-      const current = entries.get(model.key)
-      if (current === undefined) return
-      if (since !== undefined && current.since > since) return
-      entries.delete(model.key)
-    },
-    available(model) {
-      const current = entries.get(model.key)
-      return current === undefined || clock() >= current.until
+    down(model) {
+      const entry = entries.get(model.key)
+      return entry !== undefined && clock() < entry.until
     },
     waitMs(model) {
-      const current = entries.get(model.key)
-      if (current === undefined) return 0
-      return Math.max(0, current.until - clock())
+      const entry = entries.get(model.key)
+      if (entry === undefined) return 0
+      return Math.max(0, entry.until - clock())
+    },
+    reason(model) {
+      const entry = entries.get(model.key)
+      if (entry === undefined || clock() >= entry.until) return undefined
+      return entry.reason ?? "retries"
+    },
+    degraded(model) {
+      return entries.get(model.key)?.degradedSince !== undefined
+    },
+    fail(model, reason) {
+      entries.set(model.key, { until: clock() + windowMs, reason })
+      notify()
+    },
+    degrade(model) {
+      const entry = entries.get(model.key)
+      if (entry === undefined) entries.set(model.key, { until: 0, degradedSince: clock() })
+      else entry.degradedSince = clock()
+      notify()
+    },
+    succeed(model, since) {
+      const entry = entries.get(model.key)
+      if (entry === undefined || entry.degradedSince === undefined) return
+      if (since !== undefined && entry.degradedSince > since) return
+      entry.degradedSince = undefined
+      notify()
+    },
+    reset(models) {
+      let removed = false
+      for (const model of models) {
+        if (entries.delete(model.key)) removed = true
+      }
+      if (removed) notify()
     },
     snapshot() {
       const at = clock()
-      return [...entries]
-        .filter(([, entry]) => entry.until > at)
-        .map(([model, entry]) => ({ model, waitMs: entry.until - at }))
+      const rows: { model: string; reason: HealthReason; waitMs: number; degraded: boolean }[] = []
+      for (const [model, entry] of entries) {
+        if (entry.until <= at) continue
+        rows.push({ model, reason: entry.reason ?? "retries", waitMs: entry.until - at, degraded: entry.degradedSince !== undefined })
+      }
+      return rows
     },
   }
 }
@@ -123,39 +168,20 @@ export function resultText(value: unknown): string {
   return ""
 }
 
-export function isChildQuotaFailure(value: unknown): boolean {
+export function isChildFailure(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false
-  const text = resultText(value)
-  if (!isQuotaError({ message: text })) return false
   const metadata = (value as { metadata?: unknown }).metadata
   if (typeof metadata === "object" && metadata !== null) {
     const state = (metadata as { state?: unknown }).state
     if (state === "error" || state === "failed") return true
     if (state !== undefined) return false
   }
-  return text.includes('state="error"') || text.includes('state="failed"')
+  return resultText(value).includes('state="error"') || resultText(value).includes('state="failed"')
 }
 
-type ResultPlan =
-  | { readonly kind: "return"; readonly credit?: ParsedModel }
-  | { readonly kind: "retry"; readonly fail?: ParsedModel; readonly model: ParsedModel }
-
-export function planResultFallback(input: {
-  readonly result: unknown
-  readonly actual: ParsedModel | undefined
-  readonly alternates: readonly ParsedModel[]
-  readonly available: (model: ParsedModel) => boolean
-  readonly aborted: boolean
-}): ResultPlan {
-  if (input.aborted) return { kind: "return" }
-  if (!isChildQuotaFailure(input.result)) {
-    return input.actual === undefined ? { kind: "return" } : { kind: "return", credit: input.actual }
-  }
-  const candidates =
-    input.actual === undefined ? [...input.alternates] : input.alternates.filter((m) => m.key !== input.actual?.key)
-  if (candidates.length === 0) return { kind: "return" }
-  const chosen = candidates.find((m) => input.available(m)) ?? candidates[candidates.length - 1]
-  return input.actual === undefined ? { kind: "retry", model: chosen } : { kind: "retry", fail: input.actual, model: chosen }
+export function isChildQuotaFailure(value: unknown): boolean {
+  if (!isChildFailure(value)) return false
+  return classifyFailure({ message: resultText(value) }) === "quota"
 }
 
 export function planRetriedResult(input: { readonly result: unknown; readonly alternate: ParsedModel }): {
