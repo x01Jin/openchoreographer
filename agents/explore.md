@@ -2,7 +2,6 @@
 description: "Read-only recon: locates code, call sites and conventions before a task is planned"
 mode: subagent
 color: "#8aadf4"
-steps: 50
 permissions:
   - action: subagent
     resource: "*"

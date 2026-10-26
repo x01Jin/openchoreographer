@@ -2,7 +2,6 @@
 description: Reproduces bugs, writes tests, and reports exact pass or fail results
 mode: subagent
 color: "#f5bde6"
-steps: 70
 permissions:
   - action: subagent
     resource: "*"

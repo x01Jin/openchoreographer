@@ -1,10 +1,10 @@
 import { Plugin } from "@opencode/plugin"
-import { AGENT_IDS, STEP_DEFAULTS, SUBAGENT_IDS } from "./src/shared/agents"
+import { AGENT_IDS, SUBAGENT_IDS } from "./src/shared/agents"
 import { chooseModel } from "./src/shared/fallback"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
-import { SETTINGS_KEY, clampSteps, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
-import { agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "./src/server/agent-files"
+import { SETTINGS_KEY, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
+import { agentDirs, disableAgentFile, enableAgentFile, syncAgentFiles, syncOrchestratorRules, syncTeamLines } from "./src/server/agent-files"
 import { formatModelRef, resolveFallbacks, resolvePrimary, warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
 import { todoTools } from "./src/server/tools/todos"
@@ -55,7 +55,9 @@ export default Plugin.define({
         storedOk = false
         stored = defaultSettings()
       }
-      // The file is the source of step values and STEP_DEFAULTS is only the reset target, so a step override saved
+      // The file is the source of step values and the bundle defines no step
+      // budgets: a missing `steps:` key means uncapped, and clearing an override
+      // removes the file key instead of restoring a default. A step override saved
       // under the old model is stale and would mask the new defaults. Clear those overrides once; ui and animations survive.
       let settingsVersion: unknown = undefined
       try {
@@ -92,11 +94,6 @@ export default Plugin.define({
           scheduleReload()
         }
       }
-      let fileSteps: Record<string, number> = {}
-      for (const id of managedIds) {
-        const value = readAgentSteps(dirs, id)
-        if (value !== null) fileSteps[id] = value
-      }
       const loadConfigured = async (): Promise<Record<string, string | null>> => {
         const configured: Record<string, string | null> = {}
         for (const id of subagents) configured[id] = null
@@ -130,8 +127,8 @@ export default Plugin.define({
         return {
           animations: settings.current.animations,
           ui: settings.current.ui,
-          steps: { ...fileSteps },
-          defaults: Object.fromEntries(managedIds.map((id) => [id, STEP_DEFAULTS[id] ?? null])),
+          steps: {},
+          defaults: Object.fromEntries(managedIds.map((id) => [id, null])),
           managed: managedIds,
           models,
           configured: await loadConfigured(),
@@ -144,35 +141,11 @@ export default Plugin.define({
       let emitUpdated: ((snap: SettingsSnapshot) => Promise<void>) | undefined
       const rpc = await ctx.rpc.register(ChoreographerRpc, {
         getSettings: async () => {
-          const next: Record<string, number> = {}
-          for (const id of managedIds) {
-            const value = readAgentSteps(dirs, id)
-            if (value !== null) next[id] = value
-          }
-          fileSteps = next
           return snapshot()
         },
         setSettings: async (input) => {
           const next = mergeSettings(settings.current, input, managedIds)
-          const patch = (typeof input === "object" && input !== null ? input : undefined) as { steps?: unknown; disabled?: unknown } | undefined
-          if (patch !== undefined && patch.steps !== null && typeof patch.steps === "object" && !Array.isArray(patch.steps)) {
-            const stepsPatch = patch.steps as Record<string, unknown>
-            const targets: { id: string; path: string; value: number }[] = []
-            for (const id of managedIds) {
-              const raw = stepsPatch[id]
-              const value =
-                raw === null ? STEP_DEFAULTS[id] : typeof raw === "number" ? clampSteps(raw) : undefined
-              if (value === undefined) continue
-              const path = agentStepsPath(dirs, id)
-              if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
-              targets.push({ id, path, value })
-            }
-            for (const target of targets) {
-              writeAgentSteps(dirs, target.id, target.value)
-              fileSteps[target.id] = target.value
-            }
-            scheduleReload()
-          }
+          const patch = (typeof input === "object" && input !== null ? input : undefined) as { disabled?: unknown } | undefined
           if (patch !== undefined && Array.isArray(patch.disabled)) {
             const oldDisabled = settings.current.disabled
             const oldSet = new Set(oldDisabled)

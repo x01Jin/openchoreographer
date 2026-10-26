@@ -2,7 +2,6 @@
 description: Owns README, changelog, docs, and migration notes
 mode: subagent
 color: "#b7bdf8"
-steps: 50
 permissions:
   - action: subagent
     resource: "*"

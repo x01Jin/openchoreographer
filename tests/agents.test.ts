@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, TEAM_IDS, WORKER_IDS } from "../src/shared/agents";
-import { ORCHESTRATOR_RULE_LINES, agentDirs, agentStepsPath, disableAgentFile, enableAgentFile, readAgentSteps, syncAgentFiles, syncOrchestratorRules, syncTeamLines, writeAgentSteps } from "../src/server/agent-files";
+import { ORCHESTRATOR_RULE_LINES, agentDirs, disableAgentFile, enableAgentFile, syncAgentFiles, syncOrchestratorRules, syncTeamLines } from "../src/server/agent-files";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -43,18 +43,11 @@ describe("agents", () => {
       const { data, closing } = parseFrontmatter(lines);
       assert.ok(data.description && data.description.length > 0, `${file} has a non-empty description`);
       assert.ok(data.mode === "primary" || data.mode === "subagent", `${file} mode is primary or subagent`);
-      assert.ok("steps" in data, `${file} has a steps value`);
-      const steps = Number(data.steps);
-      assert.ok(Number.isInteger(steps) && steps >= 1 && steps <= 2000, `${file} steps is an integer between 1 and 2000`);
       const rest = lines.slice(closing + 1);
       const firstBody = rest.find((line) => line.trim().length > 0);
       assert.ok(firstBody !== undefined, `${file} has a body`);
       assert.ok(!firstBody.trimStart().startsWith("#"), `${file} opens with prose, not a heading`);
     }
-    const designer = parseFrontmatter(readAgent("designer.md").lines).data;
-    assert.equal(Number(designer.steps), 40, "designer.md has steps 40");
-    const writer = parseFrontmatter(readAgent("writer.md").lines).data;
-    assert.equal(Number(writer.steps), 50, "writer.md has steps 50");
   });
   test("scope refusals route to the named role", () => {
     const ids = ["backend", "frontend", "database", "devops", "tester", "designer", "writer", "explore"];
@@ -117,22 +110,18 @@ function agentFile(steps: number, body = "Body text."): string {
 }
 
 describe("agent file enable/disable", () => {
-  test("disable moves the file but keeps steps readable and editable", () => {
+  test("disable moves the file but keeps steps readable", () => {
     const dir = makeAgentDir({ "backend.md": agentFile(80) });
     try {
       const dirs = [dir];
       assert.equal(disableAgentFile(dirs, "backend"), true);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(agentStepsPath(dirs, "backend"), path.join(dir, "backend.md.disabled"));
-      assert.equal(readAgentSteps(dirs, "backend"), 80);
-      writeAgentSteps(dirs, "backend", 95);
-      assert.equal(readAgentSteps(dirs, "backend"), 95);
-      assert.ok(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8").includes("steps: 95"));
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8").includes("steps: 80"));
       assert.equal(enableAgentFile(dirs, "backend"), true);
       assert.ok(fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(readAgentSteps(dirs, "backend"), 95);
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md"), "utf8").includes("steps: 80"));
     } finally {
       removeDir(dir);
     }
@@ -159,7 +148,6 @@ describe("agent file enable/disable", () => {
       assert.ok(content.includes("Normal body."), "new disabled file has the normal content");
       assert.ok(!content.includes("Old disabled body."), "old disabled content is displaced");
       assert.ok(content.includes("steps: 55"), "old disabled steps are preserved");
-      assert.equal(readAgentSteps(dirs, "backend"), 55);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled.bak")), "no .bak remains");
     } finally {
       removeDir(dir);
@@ -184,17 +172,7 @@ describe("agent file enable/disable", () => {
       assert.equal(enableAgentFile(dirs, "backend"), true);
       assert.ok(fs.existsSync(path.join(dir, "backend.md")));
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled")));
-      assert.equal(readAgentSteps(dirs, "backend"), 99);
-    } finally {
-      removeDir(dir);
-    }
-  });
-  test("agentStepsPath prefers the disabled copy when both exist", () => {
-    const dir = makeAgentDir({ "backend.md": agentFile(80), "backend.md.disabled": agentFile(55) });
-    try {
-      const dirs = [dir];
-      assert.equal(agentStepsPath(dirs, "backend"), path.join(dir, "backend.md.disabled"));
-      assert.equal(readAgentSteps(dirs, "backend"), 55);
+      assert.ok(fs.readFileSync(path.join(dir, "backend.md"), "utf8").includes("steps: 99"));
     } finally {
       removeDir(dir);
     }
@@ -208,7 +186,6 @@ describe("agent file enable/disable", () => {
       assert.throws(() => enableAgentFile(dirs, "backend"));
       assert.equal(fs.readFileSync(path.join(dir, "backend.md"), "utf8"), normal);
       assert.equal(fs.readFileSync(path.join(dir, "backend.md.disabled"), "utf8"), disabled);
-      assert.equal(readAgentSteps(dirs, "backend"), 77);
       assert.ok(!fs.existsSync(path.join(dir, "backend.md.disabled.bak")), "no .bak remains");
     } finally {
       removeDir(dir);

@@ -34,9 +34,9 @@ function isErrnoCode(err, code) {
 }
 
 /**
- * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, resetSteps: boolean, help: boolean, version: boolean }} InstallOpts
+ * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
  * @typedef {"installed" | "overwrote" | "same" | "stale" | "skipped"} CopyStatus
- * @typedef {{ force: boolean, dryRun: boolean, preserveSteps?: boolean, resetSteps?: boolean }} CopyOptions
+ * @typedef {{ force: boolean, dryRun: boolean, preserveSteps?: boolean }} CopyOptions
  * @typedef {{ installed: number, overwrote: number, same: number, stale: number, skipped: number }} CopyCounts
  * @typedef {{ src: string, dest: string, group: "agents" | "plugin", preserveSteps?: boolean }} CopyPlan
  */
@@ -55,7 +55,6 @@ Options:
   --local      Copy plugin files into the global plugins dir, then install agents globally
   --project    Install into the current working directory (.opencode/); implies local plugin copy
   --force      Overwrite existing files that differ
-  --reset-steps  reset bundled step budgets on overwrite (requires --force)
   --prune      Delete retired agent files in the target directory (requires --force)
   --dry-run    Print planned paths and actions; write nothing
   --no-agents  Skip agent installation
@@ -83,7 +82,7 @@ Examples:
  */
 function parseArgs(argv) {
   /** @type {InstallOpts} */
-  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, noPlugin: false, prune: false, resetSteps: false, help: false, version: false };
+  const opts = { local: false, project: false, force: false, dryRun: false, noAgents: false, noDeps: false, noPlugin: false, prune: false, help: false, version: false };
   /** @type {string[]} */
   const unknown = [];
   let args = argv;
@@ -99,7 +98,6 @@ function parseArgs(argv) {
     else if (arg === "--no-deps") opts.noDeps = true;
     else if (arg === "--no-plugin") opts.noPlugin = true;
     else if (arg === "--prune") opts.prune = true;
-    else if (arg === "--reset-steps") opts.resetSteps = true;
     else if (arg === "--version") opts.version = true;
     else if (arg === "--help" || arg === "-h") opts.help = true;
     else unknown.push(arg);
@@ -259,7 +257,7 @@ function copyOne(src, dest, opts) {
   /** @type {Buffer} */
   let writeBuf = srcBuf;
   let stepsKept = false;
-  if (opts.preserveSteps === true && opts.resetSteps !== true) {
+  if (opts.preserveSteps === true) {
     const merged = mergeAgentSteps(srcBuf, destBuf);
     if (merged !== null) {
       if (merged.equals(destBuf)) {
@@ -442,11 +440,6 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  if (opts.resetSteps && !opts.force) {
-    console.error("--reset-steps requires --force");
-    process.exitCode = 1;
-    return;
-  }
 
   const isProject = opts.project;
   const copyPlugin = (opts.local || opts.project) && !opts.noPlugin;
@@ -626,7 +619,7 @@ function main() {
   const agentCounts = emptyCounts();
   const pluginCounts = emptyCounts();
   /** @type {CopyOptions} */
-  const copyOpts = { force: opts.force, dryRun: opts.dryRun, resetSteps: opts.resetSteps };
+  const copyOpts = { force: opts.force, dryRun: opts.dryRun };
   for (const entry of plan) {
     /** @type {CopyStatus} */
     let status;

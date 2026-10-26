@@ -68,35 +68,12 @@ export function agentFilePath(dirs: readonly string[], id: string): string | und
   return undefined
 }
 
-export function agentStepsPath(dirs: readonly string[], id: string): string | undefined {
-  if (!AGENT_ID_PATTERN.test(id)) return undefined
-  for (const dir of dirs) {
-    const disabled = safeAgentPath(dir, `${id}.md${DISABLED_SUFFIX}`)
-    if (disabled !== undefined) return disabled
-  }
-  for (const dir of dirs) {
-    const normal = safeAgentPath(dir, `${id}.md`)
-    if (normal !== undefined) return normal
-  }
-  return undefined
-}
-
 function parseSteps(content: string): number | null {
   const match = content.match(/^steps:[ \t]*["']?(-?\d+)/m)
   if (!match) return null
   const n = Number(match[1])
   if (!Number.isFinite(n)) return null
   return clampSteps(n)
-}
-
-function readStepsFile(path: string): number | null {
-  let content: string
-  try {
-    content = readFileSync(path, "utf8")
-  } catch {
-    return null
-  }
-  return parseSteps(content)
 }
 
 function writeStepsToPath(path: string, value: number): void {
@@ -111,18 +88,6 @@ function writeStepsToPath(path: string, value: number): void {
   if (!/^---[ \t]*\r?$/m.test(content)) throw new Error("openchoreographer: agent frontmatter not found")
   const next = content.replace(/^(---[ \t]*)(\r?\n)/m, (_, prefix, eol) => `${prefix}${eol}${line}${eol}`)
   if (next !== content) writeFileSync(path, next, "utf8")
-}
-
-export function readAgentSteps(dirs: readonly string[], id: string): number | null {
-  const path = agentStepsPath(dirs, id)
-  if (path === undefined) return null
-  return readStepsFile(path)
-}
-
-export function writeAgentSteps(dirs: readonly string[], id: string, value: number): void {
-  const path = agentStepsPath(dirs, id)
-  if (path === undefined) throw new Error("openchoreographer: agent file not found or unsafe")
-  writeStepsToPath(path, value)
 }
 
 const BACKUP_SUFFIX = ".bak"

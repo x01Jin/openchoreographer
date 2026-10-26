@@ -2,7 +2,6 @@
 description: Designs UI flows, states, copy, and accessibility intent before implementation
 mode: subagent
 color: "#eed49f"
-steps: 40
 permissions:
   - action: subagent
     resource: "*"
