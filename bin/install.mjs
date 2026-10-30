@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_DIR_NAME = "openchoreographer";
-const PLUGIN_ROOT_FILES = ["index.ts", "tui.tsx", "package.json", "README.md", "LICENSE"];
+const PLUGIN_ROOT_FILES = ["index.ts", "tui.tsx", "package.json", "package-lock.json", "README.md", "LICENSE"];
 const RETIRED_AGENT_FILES = [
   "reviewer-general.md",
   "reviewer-oop.md",
@@ -36,9 +36,9 @@ function isErrnoCode(err, code) {
 /**
  * @typedef {{ local: boolean, project: boolean, force: boolean, dryRun: boolean, noAgents: boolean, noDeps: boolean, noPlugin: boolean, prune: boolean, help: boolean, version: boolean }} InstallOpts
  * @typedef {"installed" | "overwrote" | "same" | "stale" | "skipped"} CopyStatus
- * @typedef {{ force: boolean, dryRun: boolean, preserveSteps?: boolean }} CopyOptions
+ * @typedef {{ force: boolean, dryRun: boolean }} CopyOptions
  * @typedef {{ installed: number, overwrote: number, same: number, stale: number, skipped: number }} CopyCounts
- * @typedef {{ src: string, dest: string, group: "agents" | "plugin", preserveSteps?: boolean }} CopyPlan
+ * @typedef {{ src: string, dest: string, group: "agents" | "plugin" }} CopyPlan
  */
 
 /** @returns {CopyCounts} */
@@ -155,62 +155,13 @@ function findSymlinkInPath(dest) {
  * @param {boolean} dryRun
  * @param {CopyStatus} status
  * @param {string} dest
- * @param {string} [extra] appended suffix, e.g. " (steps kept)"
  * @returns {void}
  */
-function printAction(dryRun, status, dest, extra) {
+function printAction(dryRun, status, dest) {
   const prefix = dryRun ? "[dry-run] " : "";
   const tag = `${status}:`.padEnd(10);
   const suffix = status === "stale" ? " (use --force)" : "";
-  console.log(`${prefix}${tag} ${dest}${suffix}${extra ?? ""}`);
-}
-
-/**
- * Locate YAML frontmatter: an opening `---` line at the very start of the
- * file and the next line that is exactly `---` (optional trailing spaces/CR).
- * @param {string} text file content
- * @returns {{ openEnd: number, closeStart: number, closeEnd: number } | null} fence offsets, or null when incomplete
- */
-function frontmatterBounds(text) {
-  const open = text.match(/^---[ \t]*\r?\n/);
-  if (open === null) {
-    return null;
-  }
-  const openEnd = open[0].length;
-  const close = text.slice(openEnd).match(/^---[ \t]*\r?(\n|$)/m);
-  if (close === null || close.index === undefined) {
-    return null;
-  }
-  const closeStart = openEnd + close.index;
-  return { openEnd, closeStart, closeEnd: closeStart + close[0].length };
-}
-
-/**
- * Merge a destination-tuned step budget into fresh source bytes.
- * Only the YAML frontmatter counts: a `steps:` line in the body is ignored.
- * @param {Buffer} srcBuf bundled source content
- * @param {Buffer} destBuf installed destination content
- * @returns {Buffer | null} merged content, or null when either file has no complete frontmatter or the destination has no step value to keep
- */
-function mergeAgentSteps(srcBuf, destBuf) {
-  const srcText = srcBuf.toString("utf8");
-  const destText = destBuf.toString("utf8");
-  const srcFm = frontmatterBounds(srcText);
-  const destFm = frontmatterBounds(destText);
-  if (srcFm === null || destFm === null) {
-    return null;
-  }
-  const destValue = destText.slice(destFm.openEnd, destFm.closeStart).match(/^steps:[ \t]*["']?(-?\d+)/m);
-  if (destValue === null) {
-    return null;
-  }
-  const srcFmBody = srcText.slice(srcFm.openEnd, srcFm.closeStart);
-  if (/^steps:[ \t]*["']?-?\d+.*/m.test(srcFmBody)) {
-    const mergedFmBody = srcFmBody.replace(/^steps:[ \t]*["']?-?\d+.*/m, `steps: ${destValue[1]}`);
-    return Buffer.from(`${srcText.slice(0, srcFm.openEnd)}${mergedFmBody}${srcText.slice(srcFm.closeStart)}`, "utf8");
-  }
-  const eol = srcText.includes("\r\n") ? "\r\n" : "\n";
-  return Buffer.from(`${srcText.slice(0, srcFm.openEnd)}steps: ${destValue[1]}${eol}${srcText.slice(srcFm.openEnd)}`, "utf8");
+  console.log(`${prefix}${tag} ${dest}${suffix}`);
 }
 
 /**
@@ -254,25 +205,10 @@ function copyOne(src, dest, opts) {
     printAction(opts.dryRun, "same", dest);
     return "same";
   }
-  /** @type {Buffer} */
-  let writeBuf = srcBuf;
-  let stepsKept = false;
-  if (opts.preserveSteps === true) {
-    const merged = mergeAgentSteps(srcBuf, destBuf);
-    if (merged !== null) {
-      if (merged.equals(destBuf)) {
-        printAction(opts.dryRun, "same", dest, " (steps kept)");
-        return "same";
-      }
-      writeBuf = merged;
-      stepsKept = !merged.equals(srcBuf);
-    }
-  }
-  const keptSuffix = stepsKept ? " (steps kept)" : "";
   if (opts.force) {
-    printAction(opts.dryRun, "overwrote", dest, keptSuffix);
+    printAction(opts.dryRun, "overwrote", dest);
     if (!opts.dryRun) {
-      fs.writeFileSync(dest, writeBuf);
+      fs.writeFileSync(dest, srcBuf);
     }
     return "overwrote";
   }
@@ -506,7 +442,7 @@ function main() {
   const plan = [];
   if (!opts.noAgents) {
     for (const file of agentSources) {
-      plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(agentsTarget, file), group: "agents", preserveSteps: true });
+      plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(agentsTarget, file), group: "agents" });
     }
   }
   if (copyPlugin) {
@@ -528,7 +464,7 @@ function main() {
     plan.push({ src: path.join(packageRoot, "bin", "install.mjs"), dest: path.join(pluginBinDir, "install.mjs"), group: "plugin" });
     if (!opts.noAgents) {
       for (const file of agentSources) {
-        plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(pluginAgentsDir, file), group: "plugin", preserveSteps: true });
+        plan.push({ src: path.join(bundledAgentsDir, file), dest: path.join(pluginAgentsDir, file), group: "plugin" });
       }
     }
   }
@@ -624,7 +560,7 @@ function main() {
     /** @type {CopyStatus} */
     let status;
     try {
-      status = copyOne(entry.src, entry.dest, { ...copyOpts, preserveSteps: entry.preserveSteps });
+      status = copyOne(entry.src, entry.dest, copyOpts);
     } catch (err) {
       console.error(`Failed to copy ${entry.src} -> ${entry.dest}\n${errorMessage(err)}`);
       process.exitCode = 1;
@@ -645,6 +581,16 @@ function main() {
     } else if (opts.noDeps) {
       console.log("Skipping npm install (--no-deps).");
     } else {
+      // A previous failed install can leave a stale tree (e.g. an older
+      // @opentui/core); wipe it so npm resolves fresh from the copied lockfile.
+      const nodeModulesDir = path.join(pluginTarget, "node_modules");
+      try {
+        fs.rmSync(nodeModulesDir, { recursive: true, force: true });
+      } catch (err) {
+        console.error(`Failed to remove stale node_modules: ${nodeModulesDir}\n${errorMessage(err)}`);
+        process.exitCode = 1;
+        return;
+      }
       const result = fs.existsSync(NPM_CLI)
         ? spawnSync(process.execPath, [NPM_CLI, ...DEP_ARGS], { cwd: pluginTarget, stdio: "inherit" })
         : spawnSync("npm", DEP_ARGS, { cwd: pluginTarget, stdio: "inherit", shell: process.platform === "win32" });

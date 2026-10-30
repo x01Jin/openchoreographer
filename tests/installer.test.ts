@@ -42,12 +42,28 @@ function installedBackend(configDir: string): string {
   return path.join(configDir, "agents", "backend.md");
 }
 
-describe("installer step-budget preservation", () => {
+describe("installer agent copy is byte-identical", () => {
   test("--reset-steps is no longer a flag", () => {
     const configDir = makeConfigDir();
     const result = runInstaller(["--reset-steps"], configDir);
     assert.equal(result.status, 1);
     assert.ok((result.stdout + result.stderr).includes("Unknown argument(s)"));
+  });
+
+  test("a frontmatter steps value in the destination is dropped on --force", () => {
+    const configDir = makeConfigDir();
+    const first = runInstaller(["--force", "--no-deps"], configDir);
+    assert.equal(first.status, 0, first.stderr);
+    const dest = installedBackend(configDir);
+    const bundled = bundledContent();
+    assert.ok(!STEPS_RE.test(bundled), "bundled agent has no steps line");
+    const withSteps = bundled.replace(/^---(\r?\n)/, "---$1steps: 600$1");
+    assert.ok(STEPS_RE.test(withSteps), "seed carries a frontmatter steps line");
+    assert.notEqual(withSteps, bundled, "seed differs from bundled content");
+    fs.writeFileSync(dest, withSteps);
+    const upgrade = runInstaller(["--force", "--no-deps"], configDir);
+    assert.equal(upgrade.status, 0, upgrade.stderr);
+    assert.equal(fs.readFileSync(dest, "utf8"), bundled);
   });
 
   test("a body steps line is never promoted to a budget", () => {
