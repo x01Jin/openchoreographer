@@ -1,8 +1,12 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "lib": ["ESNext"],
-    "types": ["node"],
+    "lib": [
+      "ESNext"
+    ],
+    "types": [
+      "node"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
@@ -15,5 +19,12 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["*.ts", "*.tsx", "src/**/*.ts", "src/**/*.tsx", "tests/*.ts", "bin/install.mjs"]
+  "include": [
+    "*.ts",
+    "*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/*.ts",
+    "scripts/*.ts"
+  ]
 }

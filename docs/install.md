@@ -1,54 +1,41 @@
 # Install
 
-Requires OpenCode V2 (plugin API 2.1.x) and Node 22.6+ for the installer. Full flag details are below; the short version is in the [landing page](../README.md).
+Requires OpenCode V2 (plugin API 2.2.x) and Node 22.6+.
 
 ```sh
-opencode plugin add openchoreographer
-npx openchoreographer --no-plugin
+opencode plugin add openchoreographer@latest
 ```
 
-The first command registers the plugin. The second writes the fourteen agent definitions into `~/.config/opencode/agents/` and `--no-plugin` stops the installer from copying a second copy of the plugin into `~/.config/opencode/plugins/`. Restart OpenCode afterwards.
+That is the only install step. The plugin reads its fourteen agent definitions from its own package and registers them in the server at startup. It writes no files into `~/.config/opencode/agents`, `.opencode/agents`, or `~/.config/opencode/plugins`. Restart OpenCode, or run `/reload`, after the command finishes.
 
-From a clone, or to pin a commit:
+OpenCode stores npm plugins under `~/.cache/opencode/npm/<package>@<spec>/<generation>/node_modules`. That cache is managed by OpenCode and is the package location the plugin loads from. It is not a second install and must not be edited.
+
+## Upgrade
 
 ```sh
-gh repo clone x01Jin/openchoreographer
-cd openchoreographer
-node bin/install.mjs --no-plugin
-opencode plugin add github:x01Jin/openchoreographer
+opencode plugin update openchoreographer
 ```
 
-## Flags
+The package version is the only upgrade marker. Settings, model overrides, and the disabled-subagent list live in OpenCode's plugin storage and survive an upgrade.
 
-Every flag is printed by `node bin/install.mjs --help`:
+## Uninstall
 
-- `--local`: copy the plugin plus agents into the global config dir.
-- `--project`: install into `<project>/.opencode/`; implies a local plugin copy. Refuses to run from the home directory or filesystem root unless `--force` is passed.
-- `--force`: overwrite files that differ.
-- `--reset-steps`: restore the bundled step budgets on overwrite; requires `--force`. Without it, an existing `steps:` budget in an agent file is kept.
-- `--prune`: delete retired agent files in the target directory; requires `--force`. Only the eleven retired reviewer names are ever removed.
-- `--dry-run`: print planned paths and actions; write nothing.
-- `--no-agents`: skip agent installation.
-- `--no-deps`: skip the dependency install in the copied plugin directory.
-- `--no-plugin`: install only the agent definitions; skip copying plugin files.
-- `--version`: print the installer version.
-- `-h`, `--help`: print usage.
-- A leading `init` argument is accepted and ignored.
+```sh
+opencode plugin remove openchoreographer
+```
 
-`--local` and `--project` are mutually exclusive. `--prune` and `--reset-steps` each require `--force`.
+## Local development
 
-## Comparison and exit codes
+Point OpenCode at the checkout by adding the absolute directory to `plugins` in `opencode.json(c)`:
 
-The installer compares file content. Identical files report `same`. Files that differ without `--force` are skipped and listed as `stale`, except an agent file whose only difference is a preserved `steps:` budget, which reports `same`, is not written, and does not raise the exit code. Everything else is still written. Exit `0` means everything is installed or already current, exit `2` means at least one file differs and needs `--force`, exit `1` means an error.
+```jsonc
+{
+  "plugins": ["C:\\Users\\Jin\\Documents\\DEV-stuff\\projects\\openchoreographer"]
+}
+```
 
-## Upgrade paths
+Do not load the checkout and the npm package at the same time. Both register the same commands, tools, and agents.
 
-For a clone the upgrade path is `git pull && node bin/install.mjs --force`. For the npm package run `opencode plugin update`, then `npx openchoreographer --force`. `--force` keeps an existing `steps:` budget in agent files, so tuned budgets survive an upgrade; `--reset-steps` restores the bundled defaults. `--force` installs all agent definitions, so a disabled subagent is re-added on disk until the plugin reloads and re-applies the disabled list; the plugin moves it aside again at setup.
+## Why there is no installer
 
-Upgrading from the eighteen-agent layout copies the fourteen current files but leaves the old `reviewer-*.md` files in `~/.config/opencode/agents/` and the stale model entries in `opencode.jsonc`. `node bin/install.mjs --force --prune` removes the retired files it knows about. The `agents` entries for the eleven removed reviewer ids must be deleted from `opencode.jsonc` by hand: reviewer-general, reviewer-oop, reviewer-functional, reviewer-procedural, reviewer-concurrent, reviewer-distributed, reviewer-data, reviewer-api, reviewer-frontend, reviewer-performance, reviewer-testing.
-
-## Dependencies
-
-`--local` and `--project` run `npm install --omit=dev` in the copied plugin directory, because `tui.tsx` has runtime imports (`solid-js`, `@opentui/*`) that a copied directory cannot resolve on its own. `--no-deps` skips this, at the cost of the sidebar failing to load.
-
-Do not load a local copy and the npm or GitHub package at once. Two copies register the commands and the sidebar twice.
+The previous `npx openchoreographer` step copied agent Markdown into the config directory and could leave stale copies behind. Agent registration is in memory now, so the package and the live roster cannot drift. The only supported install path is the OpenCode command above.

@@ -1,5 +1,5 @@
-// Paths and provider messages reach the orchestrator's context, and git allows newlines and ESC bytes in file
-// names, so everything interpolated from the VCS is flattened to one line before it is shown.
+
+
 export function sanitizeForContext(text: string): string {
   return text.replace(/\u001B\[[0-9;]*m/g, "").replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
 }

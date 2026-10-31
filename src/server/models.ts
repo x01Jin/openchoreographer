@@ -34,7 +34,7 @@ export async function resolvePrimary(ctx: Plugin.Context, agent: string, overrid
   const cached = primaryCache.get(agent)
   const now = Date.now()
   if (cached !== undefined && now - cached.at < PRIMARY_TTL_MS) return cached.model
-  // .then also catches a synchronous throw from the client method, which .catch on the call result would miss.
+
   const listed = await Promise.resolve()
     .then(() => ctx.agent.list({ location: ctx.location }))
     .catch(() => undefined)
@@ -52,7 +52,7 @@ export async function warnNarrowFallbacks(ctx: Plugin.Context, overrides?: Model
     const catalog = await ctx.model.list()
     const limits = new Map<string, number>()
     for (const model of catalog.data) {
-      // The catalog carries the model id twice; index both so either form resolves a configured key.
+
       limits.set(model.providerID + "/" + model.modelID, model.limit.context)
       limits.set(model.providerID + "/" + model.id, model.limit.context)
     }
@@ -73,6 +73,6 @@ export async function warnNarrowFallbacks(ctx: Plugin.Context, overrides?: Model
       }
     }
   } catch {
-    // Limits are advisory: an unavailable catalog or an unknown model must not block setup.
+
   }
 }

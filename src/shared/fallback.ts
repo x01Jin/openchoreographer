@@ -203,7 +203,7 @@ export function chooseModel(input: {
     if (input.available(alternate)) return { model: alternate, primary: input.primary, fellBack: true }
   }
   if (input.alternates.length === 0) return { model: input.primary, primary: input.primary, fellBack: false }
-  // Every alternate is also exhausted; still try the last one rather than failing outright.
+
   const last = input.alternates[input.alternates.length - 1]
   return { model: last, primary: input.primary, fellBack: true }
 }

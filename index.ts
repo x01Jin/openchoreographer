@@ -4,7 +4,7 @@ import { chooseModel } from "./src/shared/fallback"
 import { normalizeOptions } from "./src/shared/options"
 import { ChoreographerRpc } from "./src/shared/rpc"
 import { SETTINGS_KEY, defaultSettings, mergeSettings, normalizeSettings, type ModelSettings, type SettingsSnapshot } from "./src/shared/settings"
-import { agentDirs, disableAgentFile, enableAgentFile, syncAgentFiles, syncOrchestratorRules, syncTeamLines } from "./src/server/agent-files"
+import { registerChoreographerAgents } from "./src/server/agent-source"
 import { formatModelRef, resolveFallbacks, resolvePrimary, warnNarrowFallbacks } from "./src/server/models"
 import { diffTool } from "./src/server/tools/diff"
 import { todoTools } from "./src/server/tools/todos"
@@ -27,73 +27,33 @@ export default Plugin.define({
     active = []
     await Promise.allSettled(previous.map((registration) => registration.dispose()))
     const options = normalizeOptions(ctx.options)
-    // 1.2.0 accepted a `fallback` object here. It is gone, but an upgrade leaves the key in
-    // opencode.jsonc where it would otherwise vanish without explanation.
     if (typeof ctx.options === "object" && ctx.options !== null && Object.prototype.hasOwnProperty.call(ctx.options, "fallback")) {
       console.warn('openchoreographer: the "fallback" plugin option is ignored; configure fallback models in /choreographer')
     }
     const registrations: Registration[] = []
     const managedIds = [...new Set([options.agent, ...AGENT_IDS])].filter((id) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id))
     const subagents = SUBAGENT_IDS
-    let reloadTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
-    const scheduleReload = () => {
-      if (reloadTimer !== undefined) return
-      reloadTimer = setTimeout(() => {
-        reloadTimer = undefined
-        if (disposed) return
-        void ctx.agent.reload().catch((error) => console.warn(`openchoreographer: agent reload failed: ${error instanceof Error ? error.message : String(error)}`))
-      }, 50)
-    }
     try {
       let stored: unknown = undefined
-      let storedOk = true
       try {
         stored = await ctx.storage.get(SETTINGS_KEY)
       } catch (error) {
         console.warn(`openchoreographer: settings unavailable, using defaults: ${error instanceof Error ? error.message : String(error)}`)
-        storedOk = false
         stored = defaultSettings()
       }
-      // The file is the source of step values and the bundle defines no step
-      // budgets: a missing `steps:` key means uncapped, and clearing an override
-      // removes the file key instead of restoring a default. A step override saved
-      // under the old model is stale and would mask the new defaults. Clear those overrides once; ui and animations survive.
-      let settingsVersion: unknown = undefined
-      try {
-        settingsVersion = await ctx.storage.get("settingsVersion")
-      } catch {
-        settingsVersion = undefined
-      }
-      const normalized = normalizeSettings(stored, managedIds)
-      if (settingsVersion !== 3) {
-        normalized.steps = {}
-        if (storedOk) {
-          try {
-            await ctx.storage.set(SETTINGS_KEY, normalized)
-            await ctx.storage.set("settingsVersion", 3)
-          } catch (error) {
-            console.warn(`openchoreographer: settings migration failed, using defaults: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-      }
+      const normalized = normalizeSettings(stored)
       const settings = { current: normalized }
       const getModels = (): ModelSettings => settings.current.models
       const getDisabled = (): string[] => settings.current.disabled
-      const dirs = agentDirs(ctx.location)
-      if (!storedOk) {
-        console.warn("openchoreographer: settings unavailable, skipping agent file sync")
-      } else {
-        try {
-          const synced = syncAgentFiles(dirs, settings.current.disabled)
-          const orchestratorRules = syncOrchestratorRules(dirs, settings.current.disabled)
-          const teams = syncTeamLines(dirs, settings.current.disabled)
-          if (synced || orchestratorRules || teams) scheduleReload()
-        } catch (error) {
-          console.warn(`openchoreographer: agent file sync failed: ${error instanceof Error ? error.message : String(error)}`)
-          scheduleReload()
-        }
+      let agentRegistration: Awaited<ReturnType<typeof registerChoreographerAgents>> | undefined
+      try {
+        agentRegistration = await registerChoreographerAgents(ctx, () => settings.current.disabled)
+        registrations.push(agentRegistration)
+      } catch (error) {
+        console.warn(`openchoreographer: agent registration failed: ${error instanceof Error ? error.message : String(error)}`)
       }
+
       const loadConfigured = async (): Promise<Record<string, string | null>> => {
         const configured: Record<string, string | null> = {}
         for (const id of subagents) configured[id] = null
@@ -127,8 +87,6 @@ export default Plugin.define({
         return {
           animations: settings.current.animations,
           ui: settings.current.ui,
-          steps: {},
-          defaults: Object.fromEntries(managedIds.map((id) => [id, null])),
           managed: managedIds,
           models,
           configured: await loadConfigured(),
@@ -144,60 +102,21 @@ export default Plugin.define({
           return snapshot()
         },
         setSettings: async (input) => {
-          const next = mergeSettings(settings.current, input, managedIds)
-          const patch = (typeof input === "object" && input !== null ? input : undefined) as { disabled?: unknown } | undefined
-          if (patch !== undefined && Array.isArray(patch.disabled)) {
-            const oldDisabled = settings.current.disabled
-            const oldSet = new Set(oldDisabled)
-            const nextSet = new Set(next.disabled)
-            const added = next.disabled.filter((id) => !oldSet.has(id))
-            const removed = oldDisabled.filter((id) => !nextSet.has(id))
-            const appliedAdded: string[] = []
-            const appliedRemoved: string[] = []
-            let filesChanged = false
+          const next = mergeSettings(settings.current, input)
+          const disabledChanged =
+            typeof input === "object" &&
+            input !== null &&
+            Array.isArray((input as { disabled?: unknown }).disabled) &&
+            JSON.stringify(settings.current.disabled) !== JSON.stringify(next.disabled)
+          settings.current = next
+          await ctx.storage.set(SETTINGS_KEY, settings.current)
+          if (disabledChanged && agentRegistration !== undefined) {
             try {
-              for (const id of added) {
-                if (disableAgentFile(dirs, id)) filesChanged = true
-                appliedAdded.push(id)
-              }
-              for (const id of removed) {
-                if (enableAgentFile(dirs, id)) filesChanged = true
-                appliedRemoved.push(id)
-              }
-              if (syncOrchestratorRules(dirs, next.disabled)) filesChanged = true
-              if (syncTeamLines(dirs, next.disabled)) filesChanged = true
-              if (filesChanged) scheduleReload()
+              await ctx.agent.reload()
             } catch (error) {
-              for (const id of appliedAdded) {
-                try {
-                  enableAgentFile(dirs, id)
-                } catch {
-                  // Revert is best-effort; the original error below is what matters.
-                }
-              }
-              for (const id of appliedRemoved) {
-                try {
-                  disableAgentFile(dirs, id)
-                } catch {
-                  // Revert is best-effort; the original error below is what matters.
-                }
-              }
-              try {
-                syncOrchestratorRules(dirs, oldDisabled)
-              } catch {
-                // Revert is best-effort; the original error below is what matters.
-              }
-              try {
-                syncTeamLines(dirs, oldDisabled)
-              } catch {
-                // Revert is best-effort; the original error below is what matters.
-              }
-              throw error
+              console.warn(`openchoreographer: agent reload failed: ${error instanceof Error ? error.message : String(error)}`)
             }
           }
-          settings.current = next
-          settings.current.steps = {}
-          await ctx.storage.set(SETTINGS_KEY, settings.current)
           const snap = await snapshot()
           if (emitUpdated) await emitUpdated(snap)
           return snap
@@ -275,7 +194,7 @@ export default Plugin.define({
         const ids = listed.data.map((agent) => agent.id)
         const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id) && !settings.current.disabled.includes(id)) : []
         if (missing.length > 0) {
-          console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Run: node bin/install.mjs --force, then restart OpenCode.")
+          console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Restart OpenCode or run /reload.")
         }
       } else {
         console.warn("openchoreographer: agent list unavailable, skipping setup validation")
@@ -308,10 +227,6 @@ export default Plugin.define({
       active = registrations
       return async () => {
         disposed = true
-        if (reloadTimer !== undefined) {
-          clearTimeout(reloadTimer)
-          reloadTimer = undefined
-        }
         if (healthTimer !== undefined) {
           clearTimeout(healthTimer)
           healthTimer = undefined

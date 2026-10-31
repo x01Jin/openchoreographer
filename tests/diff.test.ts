@@ -2,8 +2,8 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 import { collapseEolOnlyChanges, summarizeChanges, validateDiffInput } from "../src/shared/diff"
 
-// A CRLF working tree over an LF blob makes unified diffs report every unchanged line as a -/+ pair that differs
-// only by the trailing CR. Each fixture below is a patch the way a provider would hand it back.
+
+
 
 const WHOLE_FILE_REWRITE = `diff --git a/f.txt b/f.txt
 index 1111111..2222222 100644

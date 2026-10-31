@@ -21,9 +21,9 @@ export const health = createModelHealth({
 export function retryHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.session.hook("retry", (event) => {
     const alternates = resolveFallbacks(event.agent, getModels())
-    // An agent without configured fallbacks keeps the host behavior untouched.
+
     if (alternates.length === 0) return
-    // The host Model.Ref splits provider and id, so rejoin them for health accounting.
+
     const current = parseModel(event.model.providerID + "/" + event.model.id + (event.model.variant ? "#" + event.model.variant : ""))
     if (current === undefined) return
     const plan = planRetryDecision({ error: event.error, attempt: event.attempt, degraded: health.degraded(current), hasFallback: true })
@@ -43,7 +43,7 @@ export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSe
   return ctx.tool.hook("execute.before", async (event) => {
     if (event.tool !== "subagent") return
     if (typeof event.input !== "object" || event.input === null) return
-    // The subagent input shape is host-defined, so narrow it once to read fields.
+
     const record = event.input as Record<string, unknown>
     if (typeof record.agent !== "string") return
     const agent = record.agent
@@ -78,7 +78,7 @@ export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSe
 export function subagentAfterHook(ctx: Plugin.Context) {
   return ctx.tool.hook("execute.after", (event) => {
     if (event.tool !== "subagent" || event.status !== "completed") return
-    // Clipping is best-effort: a mutation failure must never turn a finished call into an error.
+
     try {
       const result = event.result
       if (typeof result.content === "string") {

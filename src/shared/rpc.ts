@@ -20,16 +20,6 @@ const uiSchema = {
   additionalProperties: false,
 } as const
 
-const stepsSchema = {
-  type: "object",
-  additionalProperties: { type: "integer" },
-} as const
-
-const defaultsSchema = {
-  type: "object",
-  additionalProperties: { type: ["integer", "null"] },
-} as const
-
 const modelsSchema = {
   type: "object",
   properties: {
@@ -74,8 +64,6 @@ const snapshotSchema = {
   properties: {
     animations: animationsSchema,
     ui: uiSchema,
-    steps: stepsSchema,
-    defaults: defaultsSchema,
     managed: { type: "array", items: { type: "string" } },
     models: modelsSchema,
     configured: configuredSchema,
@@ -84,7 +72,7 @@ const snapshotSchema = {
     maxParallel: { type: "integer", minimum: 1, maximum: 8 },
     routing: routingSchema,
   },
-  required: ["animations", "ui", "steps", "defaults", "managed", "models", "configured", "subagents", "disabled", "maxParallel", "routing"],
+  required: ["animations", "ui", "managed", "models", "configured", "subagents", "disabled", "maxParallel", "routing"],
   additionalProperties: false,
 } as const
 
@@ -104,10 +92,6 @@ const setSettings = {
           running: { type: "boolean" },
         },
         additionalProperties: false,
-      },
-      steps: {
-        type: "object",
-        additionalProperties: { type: ["integer", "null"] },
       },
       ui: {
         type: "object",

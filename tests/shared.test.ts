@@ -12,7 +12,7 @@ function options(overrides: Partial<Options> = {}): Options {
   return { agent: "orchestrator", maxReviewers: 2, ...overrides }
 }
 
-// normalizeOptions reports bad input on console.warn; these tests assert returned values only.
+
 function muted<T>(run: () => T): T {
   const original = console.warn
   console.warn = () => {}

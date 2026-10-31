@@ -1,6 +1,5 @@
 export const MAX_RESULT_CHARS = 4_000
 
-// The worker return contract puts TASK and FILES at the top and BLOCKED and RISK at the bottom, so both ends survive.
 function clipHead(text: string, budget: number): string {
   let cut = Math.min(budget, text.length)
   const newline = text.lastIndexOf("\n", cut - 1)
@@ -29,7 +28,7 @@ export type ClipOptions = {
 }
 
 export function clipResultStats(text: string, limit = MAX_RESULT_CHARS, options: ClipOptions = {}): { text: string; dropped: number } {
-  // A slice end at or below zero counts from the tail, which would keep more than the limit.
+
   if (limit <= 0) return { text: "", dropped: text.length }
   if (text.length <= limit) return { text, dropped: 0 }
   const marker = options.marker ?? ((dropped: number) => `\n… ${dropped} chars dropped (result over ${limit}); read the diff and files for evidence\n`)

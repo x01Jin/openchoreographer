@@ -4,9 +4,9 @@ import { clipShellOutput, clipShellParts } from "../shared/results"
 export function outputClipHook(ctx: Plugin.Context) {
   return ctx.tool.hook("execute.after", (event) => {
     if (event.tool !== "shell" && event.tool !== "bash") return
-    // The error branch carries no result, so only a finished call has text to budget.
+
     if (event.status !== "completed") return
-    // Clipping is best-effort: a mutation failure must never turn a finished call into an error.
+
     try {
       const result = event.result
       if (typeof result.content === "string") {
@@ -21,7 +21,7 @@ export function outputClipHook(ctx: Plugin.Context) {
         return
       }
       if (!Array.isArray(result.content)) return
-      // One budget for the whole call: per-part limits would let five long parts through untouched.
+
       const clipped = clipShellParts(result.content)
       if (clipped.dropped === 0) return
       event.result = {

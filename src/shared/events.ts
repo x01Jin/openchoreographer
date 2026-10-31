@@ -1,4 +1,4 @@
-// Streaming events are excluded on purpose because the sidebar shows session structure, status, and todos, not message text.
+
 const SIDEBAR_REFRESH_EVENTS: ReadonlySet<string> = new Set([
   "session.created",
   "session.deleted",

@@ -33,7 +33,7 @@ export function validateDiffInput(input: unknown): ValidatedDiffInput {
 
 type ChangeFile = { readonly file: string; readonly patch: string; readonly additions: number; readonly deletions: number }
 
-// Keyword signals are a floor, not a ceiling: path traversal, SSRF, and deserialization stay judgment calls.
+
 export function summarizeChanges(files: readonly ChangeFile[]): string {
   let additions = 0
   let deletions = 0

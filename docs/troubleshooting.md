@@ -1,10 +1,10 @@
 # Troubleshooting
 
-- Missing agent definitions: the plugin logs a warning naming the unregistered agents and still loads. Re-run `node bin/install.mjs --force`, then restart OpenCode.
-- Sidebar empty: the TUI half failed to resolve `solid-js`. Re-run the installer without `--no-deps`.
-- Commands registered twice: two copies of the plugin are loaded. Remove one; see [install](install.md) for why a local copy and the npm or GitHub package must not load together.
-- Diff counts that look like whole files: the VCS provider is comparing a CRLF working tree against LF blobs. The [diff](diff.md) tool collapses that churn; if the counts still look wrong, check `git ls-files --eol` and the repository's line-ending configuration.
-- Quota failures on every spawn with no fallback switch: the agent inherits a free-tier parent model and has no fallback override. Set a primary and a fallback in the dialog; see [models](models.md). A background child that hits quota fails inside its own session after the parent already received its sessionID, so there is no spawn-time retry for it.
-- Settings changes that do not stick: the server half is not running, so the dialog applies animation and interface toggles from the TUI's own storage and leaves the agent rows unavailable. Restart OpenCode and try again.
-- Stale installed agents after a pull: the bundle moved but the installed copies in `~/.config/opencode/agents/` (or `.opencode/agents`) still hold the old bodies. Re-run with `--force`, and add `--prune` if retired reviewer files remain; see [install](install.md).
-- Disabled subagent reappears after `--force`: the installer re-adds every definition, then the plugin re-applies the disabled list at the next load. Restart OpenCode to finish it. An `<id>.md.disabled` file in the agents directory is expected, not a stray file, as are `orchestrator.md.full` and `orchestrator.md.full.json` beside the orchestrator while any subagent is disabled; they disappear when all are enabled. Deleting them loses the ability to restore the removed rules.
+- Missing agent definitions: the plugin logs `agent registration failed` with the parser error and still loads. Check `agents/*.md` frontmatter. Run `/reload` after fixing it.
+- TUI plugin failed with `Cannot find package 'react'`: an old package shipped `tui.tsx` as the `./tui` entry. Version 1.4.1 exports `src/tui/tui.js`. Run `opencode plugin update openchoreographer`.
+- Sidebar empty: the TUI half failed to resolve `solid-js` or `@opentui/*`. Reinstall with `opencode plugin remove openchoreographer` and then `opencode plugin add openchoreographer@latest`.
+- Commands registered twice: the checkout and the npm package are both loaded. Remove one entry from `plugins`.
+- Diff counts that look like whole files: the VCS provider is comparing a CRLF working tree against LF blobs. The [diff](diff.md) tool collapses that churn; if the counts still look wrong, check `git ls-files --eol`.
+- Quota failures on every spawn with no fallback switch: the agent inherits a free-tier parent model and has no fallback override. Set a primary and a fallback in the dialog; see [models](models.md).
+- Settings changes that do not stick: the server half is not running. Restart OpenCode and try again.
+- Disabled subagent still appears: the transform has not reloaded. Run `/reload`; if it persists, another plugin or an old `~/.config/opencode/agents/<id>.md` is registering it. Delete that stale file.

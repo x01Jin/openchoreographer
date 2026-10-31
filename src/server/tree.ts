@@ -10,9 +10,9 @@ export function treeKey(entry: TreeEntry): string {
 const TREE_CACHE_MS = 1000
 const treeCache = new Map<string, { at: number; promise: Promise<readonly TreeEntry[] | undefined> }>()
 
-// The baseline read is shared per location for 1000 ms so parallel spawns reuse one in-flight or settled VCS call,
-// failures included. Trade-off: a change made within the window before a spawn is treated as pre-existing
-// by the retry gate.
+
+
+
 export async function readTree(ctx: Plugin.Context, fresh = false): Promise<readonly TreeEntry[] | undefined> {
   const now = Date.now()
   for (const [key, entry] of treeCache) {

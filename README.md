@@ -5,15 +5,12 @@ A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents
 ## Install
 
 ```sh
-opencode plugin add openchoreographer
-```
-```sh
-npx openchoreographer --no-plugin
+opencode plugin add openchoreographer@latest
 ```
 
-The first command registers the plugin. The second writes the fourteen agent definitions into `~/.config/opencode/agents/`. Restart OpenCode afterwards.
+That is the only install step. The plugin registers its fourteen agents in memory from its own package and writes no agent files into `~/.config/opencode/agents/` or `.opencode/agents/`. Restart OpenCode, or run `/reload`, afterwards.
 
-Requires OpenCode V2 (plugin API 2.1.x) and Node 22.6+ for the installer. Every flag, exit code, and upgrade path is in [docs/install.md](docs/install.md).
+Requires OpenCode V2 (plugin API 2.2.x) and Node 22.6+. OpenCode caches the npm package under `~/.cache/opencode/npm/`; do not edit that copy. See [docs/install.md](docs/install.md).
 
 Do not load a local copy and the npm or GitHub package at once.
 
@@ -33,17 +30,17 @@ If `default_agent` is `"orchestrator"` in `opencode.jsonc`, new sessions use the
 | Topic | Page | One-line summary |
 | --- | --- | --- |
 | What the plugin is | [docs/overview.md](docs/overview.md) | Server/TUI split, commands, agents at a glance, result clipping, state |
-| Installing and upgrading | [docs/install.md](docs/install.md) | npm and clone install, every installer flag, exit codes, prune |
-| The 14 agents | [docs/roster.md](docs/roster.md) | Full agent table, worker contract, scope routing, step budgets |
+| Installing and upgrading | [docs/install.md](docs/install.md) | The one install command, upgrade, uninstall, local development |
+| The 14 agents | [docs/roster.md](docs/roster.md) | Full agent table, worker contract, scope routing |
 | How work gets delegated | [docs/orchestration.md](docs/orchestration.md) | Operating loop, effort tiers, background subagents, failure handling |
 | Reviews | [docs/reviews.md](docs/reviews.md) | Diff review panel, lenses, plan-stage reviewers, findings format |
 | Models and fallbacks | [docs/models.md](docs/models.md) | Primary precedence, dialog overrides, failure classes, retry ladder |
-| Sidebar and settings dialog | [docs/ui.md](docs/ui.md) | Roster sections, toggles, step and model rows, picker keys |
+| Sidebar and settings dialog | [docs/ui.md](docs/ui.md) | Roster sections, toggles, model rows, picker keys |
 | The diff tool | [docs/diff.md](docs/diff.md) | Parameters, output shape, Risk line, limits, CRLF handling |
 | Todos and fallback status | [docs/tools.md](docs/tools.md) | todowrite, todoread, fallback_status |
 | Plugin options | [docs/configuration.md](docs/configuration.md) | agent, maxReviewers, with an example |
 | Measuring tokens and cost | [docs/cost.md](docs/cost.md) | V2 session stats, the fixture protocol, and the numbers to record |
-| Working on the plugin | [docs/development.md](docs/development.md) | Layout, scripts, installer checks, style, id duplication |
+| Working on the plugin | [docs/development.md](docs/development.md) | Layout, TUI build, checks, agent registration, style |
 | When something is wrong | [docs/troubleshooting.md](docs/troubleshooting.md) | Common failures and what fixes each one |
 
 ## License

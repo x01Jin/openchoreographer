@@ -15,10 +15,6 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
   { id: "reviewers", label: "REVIEWERS", ids: [...REVIEWER_IDS] },
 ]
 
-// The bundle defines no step budgets: agents are uncapped unless their file
-// carries a `steps:` key. An empty record keeps existing imports compiling;
-// nothing here may supply a per-agent budget.
-export const STEP_DEFAULTS: Readonly<Record<string, number>> = {}
 
 export function isReviewer(id: string): boolean {
   return REVIEWER_IDS.includes(id)
