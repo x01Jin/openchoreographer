@@ -1,6 +1,6 @@
 # openchoreographer
 
-A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents that outputs quality without eating too much usage
+A lightweight OpenCode V2 orchestration plugin with worker and reviewer subagents that adapts to your already installed tools and adapts to your already set workflows, a classic simple set and forget setup, you can even configure models for each workers easily via `/choreographer` command.
 
 ## Install
 
@@ -8,7 +8,7 @@ A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents
 opencode plugin add openchoreographer@latest
 ```
 
-That is the only install step. The plugin registers its fourteen agents in memory from its own package and writes no agent files into `~/.config/opencode/agents/` or `.opencode/agents/`. Restart OpenCode, or run `/reload`, afterwards.
+That is the only install step. The plugin registers its fourteen agents in memory from its own package and writes no agent files into `~/.config/opencode/agents/` or `.opencode/agents/`. Restart OpenCode, or run `/restart`, afterwards.
 
 Requires OpenCode V2 (plugin API 2.2.x) and Node 22.6+. OpenCode caches the npm package under `~/.cache/opencode/npm/`; do not edit that copy. See [docs/install.md](docs/install.md).
 
