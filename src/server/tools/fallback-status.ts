@@ -8,7 +8,7 @@ export function fallbackStatusTool(ctx: Plugin.Context, health: ModelHealth, get
   return ctx.tool.transform((editor) => {
     editor.add({
       name: "fallback_status",
-      description: "Report each managed agent's primary model, fallbacks configured in the settings dialog, and whether any model is down or degraded.",
+      description: "Report each subagent's primary model, fallbacks configured in the settings dialog, and whether any model is down or degraded.",
       input: { type: "object", properties: {}, additionalProperties: false },
       options: { permission: "read" },
       execute: async () => {

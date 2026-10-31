@@ -1,4 +1,4 @@
-export const MAX_RESULT_CHARS = 4_000
+export const MAX_RESULT_CHARS = 3_000
 
 function clipHead(text: string, budget: number): string {
   let cut = Math.min(budget, text.length)
@@ -62,7 +62,7 @@ function stripShellNoise(text: string): string {
 
 // Shell failures and test summaries sit at the tail, so shell output keeps the smaller head share.
 // labelLimit names the overall cap in the marker when a caller clips against a smaller remaining budget.
-export function clipShellOutput(text: string, limit = 8_000, labelLimit = limit): { text: string; dropped: number } {
+export function clipShellOutput(text: string, limit = 6_000, labelLimit = limit): { text: string; dropped: number } {
   const clean = stripShellNoise(text)
   // Escape codes the model never needed count as dropped, but they never reach the marker's arithmetic.
   const stripped = text.length - clean.length
@@ -75,8 +75,8 @@ export function clipShellOutput(text: string, limit = 8_000, labelLimit = limit)
 
 export type ShellPart = { readonly type: string; readonly text?: string }
 
-// A shell result can be split into parts, so the cap is shared: one 8000-char budget across every text part.
-export function clipShellParts<P extends ShellPart>(parts: ReadonlyArray<P>, limit = 8_000): { parts: P[]; dropped: number } {
+// A shell result can be split into parts, so the cap is shared: one 6000-char budget across every text part.
+export function clipShellParts<P extends ShellPart>(parts: ReadonlyArray<P>, limit = 6_000): { parts: P[]; dropped: number } {
   let remaining = limit
   let before = 0
   let after = 0
@@ -106,7 +106,7 @@ function visibleForGuards(text: string): string {
 const UNCLIPPABLE = /^\s*(?:BLOCKED|RISK|NOT DONE):(?!\s*(?:nothing|none)\b)/im
 const SECRET = /-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_-]?key|secret|password|token)\s*[:=]\s*\S{8,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|Bearer\s+\S{8,}/i
 
-export function clipSubagentReport(text: string, limit = 2_500): { text: string; dropped: number } {
+export function clipSubagentReport(text: string, limit = 2_000): { text: string; dropped: number } {
   const visible = visibleForGuards(text)
   if (UNCLIPPABLE.test(visible) || SECRET.test(visible)) return { text, dropped: 0 }
   return clipResultStats(text, limit, {
@@ -128,7 +128,7 @@ function isSubagentReport(text: string): boolean {
 export type ClipPart = { readonly type: string; readonly text?: string | null }
 export type ClipMessage = { readonly role: string; readonly content: ReadonlyArray<ClipPart> }
 
-export function clipSubagentReports<M extends ClipMessage>(messages: M[], limit = 2_500): { messages: M[]; clipped: number } {
+export function clipSubagentReports<M extends ClipMessage>(messages: M[], limit = 2_000): { messages: M[]; clipped: number } {
   const next: M[] = []
   let clipped = 0
   for (const message of messages) {

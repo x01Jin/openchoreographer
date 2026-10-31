@@ -8,7 +8,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function normalizeOptions(raw: Record<string, unknown> | undefined): Options {
-  if (!raw || typeof raw !== "object") return { agent: "orchestrator", maxReviewers: 2 }
+  if (!raw || typeof raw !== "object") return { agent: "orchestrator", maxReviewers: 1 }
   const agentValue: unknown = raw.agent
   if (agentValue !== undefined && typeof agentValue !== "string") {
     console.warn(`orchestrator options: expected string for "agent", received ${typeof agentValue}`)
@@ -19,6 +19,6 @@ export function normalizeOptions(raw: Record<string, unknown> | undefined): Opti
     console.warn(`orchestrator options: expected finite number for "maxReviewers", received ${typeof reviewersValue}`)
   }
   const maxReviewers =
-    typeof reviewersValue === "number" && Number.isFinite(reviewersValue) ? clamp(Math.floor(reviewersValue), 1, 4) : 2
+    typeof reviewersValue === "number" && Number.isFinite(reviewersValue) ? clamp(Math.floor(reviewersValue), 1, 4) : 1
   return { agent, maxReviewers }
 }

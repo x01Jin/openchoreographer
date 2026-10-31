@@ -10,7 +10,7 @@ import { createElement as _$createElement } from "@opentui/solid";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { PARALLEL_DEFAULT, PARALLEL_MAX, PARALLEL_MIN } from "../shared/settings";
-import { MODEL_GROUPS, ORCHESTRATOR_ID, SUBAGENT_IDS } from "../shared/agents";
+import { MODEL_GROUPS } from "../shared/agents";
 import { FLOW, agentColor, truncate } from "./format";
 const SECTIONS = {
   animation: {
@@ -24,10 +24,6 @@ const SECTIONS = {
   maxParallel: {
     title: "INTERFACE",
     color: FLOW[1]
-  },
-  agent: {
-    title: "SUBAGENT TOGGLE",
-    color: "#c6a0f6"
   },
   primaryModel: {
     title: "PRIMARY MODELS",
@@ -114,11 +110,6 @@ export function SettingsPanel(props) {
       kind: "maxParallel",
       label: "Max parallel"
     }];
-    for (const id of props.managed()) list.push({
-      kind: "agent",
-      id,
-      label: truncate(id, 18)
-    });
     for (const group of MODEL_GROUPS) {
       list.push({
         kind: "primaryBulk",
@@ -473,12 +464,6 @@ export function SettingsPanel(props) {
   };
   const pressSpace = () => {
     if (picker() !== null) return;
-    const row = rows()[current()];
-    if (row?.kind === "agent") {
-      if (row.id === ORCHESTRATOR_ID) return;
-      props.toggleAgent(row.id);
-      return;
-    }
     pressConfirm();
   };
   const pressClear = () => {
@@ -596,7 +581,7 @@ export function SettingsPanel(props) {
     })();
     if (row.kind === "animation" || row.kind === "ui") {
       const accent = row.kind === "animation" ? FLOW[0] : FLOW[1];
-      const on = () => row.kind === "animation" ? props.settings.animations[row.key] : props.settings.ui?.[row.key] ?? true;
+      const on = () => row.kind === "animation" ? props.settings.animations[row.key] : props.settings.ui?.[row.key] ?? (row.key === "todos" ? false : true);
       const toggleRow = () => {
         if (row.kind === "animation") props.toggleAnimation(row.key);else props.toggleUi(row.key);
       };
@@ -708,22 +693,14 @@ export function SettingsPanel(props) {
         return _el$5;
       })();
     }
-    if (row.kind === "agent") {
-      const isOrchestrator = row.id === ORCHESTRATOR_ID;
-      const off = () => !isOrchestrator && props.disabled().includes(row.id);
-      const accent = agentColor(props.agentById(row.id), row.id);
-      const idColor = () => off() ? props.context.theme.text.faint : accent;
-      const toggleBox = event => {
-        if (event.button !== 0 || event.isDragging) return;
-        event.stopPropagation();
-        select();
-        props.toggleAgent(row.id);
-      };
+    if (row.kind === "primaryBulk") {
+      const accent = SECTIONS[row.kind].color;
+      const open = () => openPicker(row, index);
+      const ids = () => memberIdsFor(row.group);
+      const valueText = () => primaryBulkValue(ids());
       return (() => {
         var _el$13 = _$createElement("box"),
-          _el$14 = _$createElement("box"),
-          _el$15 = _$createElement("text"),
-          _el$18 = _$createElement("text");
+          _el$14 = _$createElement("text");
         _$insertNode(_el$13, _el$14);
         _$setProp(_el$13, "flexDirection", "row");
         _$setProp(_el$13, "width", "100%");
@@ -732,96 +709,14 @@ export function SettingsPanel(props) {
         _$setProp(_el$13, "onMouseDown", event => {
           if (event.button !== 0 || event.isDragging) return;
           select();
-        });
-        _$insertNode(_el$14, _el$15);
-        _$insertNode(_el$14, _el$18);
-        _$setProp(_el$14, "flexDirection", "row");
-        _$setProp(_el$14, "flexShrink", 1);
-        _$setProp(_el$14, "minWidth", 0);
-        _$setProp(_el$14, "overflow", "hidden");
-        _$setProp(_el$14, "columnGap", 1);
-        _$setProp(_el$15, "selectable", false);
-        _$insert(_el$15, marker);
-        _$insert(_el$14, _$createComponent(Show, {
-          when: !isOrchestrator,
-          get children() {
-            var _el$16 = _$createElement("box"),
-              _el$17 = _$createElement("text");
-            _$insertNode(_el$16, _el$17);
-            _$setProp(_el$16, "onMouseDown", toggleBox);
-            _$setProp(_el$17, "selectable", false);
-            _$insert(_el$17, () => off() ? "[ ]" : "[x]");
-            _$effect(_p$ => {
-              var _v$8 = off() ? props.context.theme.text.faint : "#a6e3a1",
-                _v$9 = active() ? TextAttributes.BOLD : undefined;
-              _v$8 !== _p$.e && (_p$.e = _$setProp(_el$17, "fg", _v$8, _p$.e));
-              _v$9 !== _p$.t && (_p$.t = _$setProp(_el$17, "attributes", _v$9, _p$.t));
-              return _p$;
-            }, {
-              e: undefined,
-              t: undefined
-            });
-            return _el$16;
-          }
-        }), _el$18);
-        _$setProp(_el$18, "wrapMode", "none");
-        _$setProp(_el$18, "selectable", false);
-        _$insert(_el$18, () => row.label);
-        _$insert(_el$14, _$createComponent(Show, {
-          get when() {
-            return off();
-          },
-          get children() {
-            var _el$19 = _$createElement("text");
-            _$insertNode(_el$19, _$createTextNode(`off`));
-            _$setProp(_el$19, "fg", "#f5a97f");
-            _$setProp(_el$19, "selectable", false);
-            return _el$19;
-          }
-        }), null);
-        _$effect(_p$ => {
-          var _v$0 = props.context.theme.text.base,
-            _v$1 = active() ? TextAttributes.BOLD : undefined,
-            _v$10 = idColor(),
-            _v$11 = active() ? TextAttributes.BOLD : undefined;
-          _v$0 !== _p$.e && (_p$.e = _$setProp(_el$15, "fg", _v$0, _p$.e));
-          _v$1 !== _p$.t && (_p$.t = _$setProp(_el$15, "attributes", _v$1, _p$.t));
-          _v$10 !== _p$.a && (_p$.a = _$setProp(_el$18, "fg", _v$10, _p$.a));
-          _v$11 !== _p$.o && (_p$.o = _$setProp(_el$18, "attributes", _v$11, _p$.o));
-          return _p$;
-        }, {
-          e: undefined,
-          t: undefined,
-          a: undefined,
-          o: undefined
-        });
-        return _el$13;
-      })();
-    }
-    if (row.kind === "primaryBulk") {
-      const accent = SECTIONS[row.kind].color;
-      const open = () => openPicker(row, index);
-      const ids = () => memberIdsFor(row.group);
-      const valueText = () => primaryBulkValue(ids());
-      return (() => {
-        var _el$21 = _$createElement("box"),
-          _el$22 = _$createElement("text");
-        _$insertNode(_el$21, _el$22);
-        _$setProp(_el$21, "flexDirection", "row");
-        _$setProp(_el$21, "width", "100%");
-        _$setProp(_el$21, "justifyContent", "space-between");
-        _$setProp(_el$21, "columnGap", 2);
-        _$setProp(_el$21, "onMouseDown", event => {
-          if (event.button !== 0 || event.isDragging) return;
-          select();
           open();
         });
-        _$insert(_el$21, () => label(accent), _el$22);
-        _$setProp(_el$22, "fg", accent);
-        _$setProp(_el$22, "selectable", false);
-        _$insert(_el$22, valueText);
-        _$effect(_$p => _$setProp(_el$22, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
-        return _el$21;
+        _$insert(_el$13, () => label(accent), _el$14);
+        _$setProp(_el$14, "fg", accent);
+        _$setProp(_el$14, "selectable", false);
+        _$insert(_el$14, valueText);
+        _$effect(_$p => _$setProp(_el$14, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
+        return _el$13;
       })();
     }
     if (row.kind === "fallbackBulk") {
@@ -830,24 +725,24 @@ export function SettingsPanel(props) {
       const ids = () => memberIdsFor(row.group);
       const valueText = () => fallbackBulkValue(ids());
       return (() => {
-        var _el$23 = _$createElement("box"),
-          _el$24 = _$createElement("text");
-        _$insertNode(_el$23, _el$24);
-        _$setProp(_el$23, "flexDirection", "row");
-        _$setProp(_el$23, "width", "100%");
-        _$setProp(_el$23, "justifyContent", "space-between");
-        _$setProp(_el$23, "columnGap", 2);
-        _$setProp(_el$23, "onMouseDown", event => {
+        var _el$15 = _$createElement("box"),
+          _el$16 = _$createElement("text");
+        _$insertNode(_el$15, _el$16);
+        _$setProp(_el$15, "flexDirection", "row");
+        _$setProp(_el$15, "width", "100%");
+        _$setProp(_el$15, "justifyContent", "space-between");
+        _$setProp(_el$15, "columnGap", 2);
+        _$setProp(_el$15, "onMouseDown", event => {
           if (event.button !== 0 || event.isDragging) return;
           select();
           open();
         });
-        _$insert(_el$23, () => label(accent), _el$24);
-        _$setProp(_el$24, "fg", accent);
-        _$setProp(_el$24, "selectable", false);
-        _$insert(_el$24, valueText);
-        _$effect(_$p => _$setProp(_el$24, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
-        return _el$23;
+        _$insert(_el$15, () => label(accent), _el$16);
+        _$setProp(_el$16, "fg", accent);
+        _$setProp(_el$16, "selectable", false);
+        _$insert(_el$16, valueText);
+        _$effect(_$p => _$setProp(_el$16, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
+        return _el$15;
       })();
     }
     const accent = agentColor(props.agentById(row.id), row.id);
@@ -859,200 +754,200 @@ export function SettingsPanel(props) {
         return truncateMiddle(nameForRef(shown), 26);
       };
       return (() => {
-        var _el$25 = _$createElement("box"),
-          _el$26 = _$createElement("text");
-        _$insertNode(_el$25, _el$26);
-        _$setProp(_el$25, "flexDirection", "row");
-        _$setProp(_el$25, "width", "100%");
-        _$setProp(_el$25, "justifyContent", "space-between");
-        _$setProp(_el$25, "columnGap", 2);
-        _$setProp(_el$25, "onMouseDown", event => {
+        var _el$17 = _$createElement("box"),
+          _el$18 = _$createElement("text");
+        _$insertNode(_el$17, _el$18);
+        _$setProp(_el$17, "flexDirection", "row");
+        _$setProp(_el$17, "width", "100%");
+        _$setProp(_el$17, "justifyContent", "space-between");
+        _$setProp(_el$17, "columnGap", 2);
+        _$setProp(_el$17, "onMouseDown", event => {
           if (event.button !== 0 || event.isDragging) return;
           select();
           open();
         });
-        _$insert(_el$25, () => label(accent), _el$26);
-        _$setProp(_el$26, "fg", accent);
-        _$setProp(_el$26, "selectable", false);
-        _$insert(_el$26, valueText);
-        _$effect(_$p => _$setProp(_el$26, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
-        return _el$25;
+        _$insert(_el$17, () => label(accent), _el$18);
+        _$setProp(_el$18, "fg", accent);
+        _$setProp(_el$18, "selectable", false);
+        _$insert(_el$18, valueText);
+        _$effect(_$p => _$setProp(_el$18, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
+        return _el$17;
       })();
     }
     const valueText = () => listText(fallbackEffective(row.id));
     return (() => {
-      var _el$27 = _$createElement("box"),
-        _el$28 = _$createElement("text");
-      _$insertNode(_el$27, _el$28);
-      _$setProp(_el$27, "flexDirection", "row");
-      _$setProp(_el$27, "width", "100%");
-      _$setProp(_el$27, "justifyContent", "space-between");
-      _$setProp(_el$27, "columnGap", 2);
-      _$setProp(_el$27, "onMouseDown", event => {
+      var _el$19 = _$createElement("box"),
+        _el$20 = _$createElement("text");
+      _$insertNode(_el$19, _el$20);
+      _$setProp(_el$19, "flexDirection", "row");
+      _$setProp(_el$19, "width", "100%");
+      _$setProp(_el$19, "justifyContent", "space-between");
+      _$setProp(_el$19, "columnGap", 2);
+      _$setProp(_el$19, "onMouseDown", event => {
         if (event.button !== 0 || event.isDragging) return;
         select();
         open();
       });
-      _$insert(_el$27, () => label(accent), _el$28);
-      _$setProp(_el$28, "fg", accent);
-      _$setProp(_el$28, "selectable", false);
-      _$insert(_el$28, valueText);
-      _$effect(_$p => _$setProp(_el$28, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
-      return _el$27;
+      _$insert(_el$19, () => label(accent), _el$20);
+      _$setProp(_el$20, "fg", accent);
+      _$setProp(_el$20, "selectable", false);
+      _$insert(_el$20, valueText);
+      _$effect(_$p => _$setProp(_el$20, "attributes", active() ? TextAttributes.BOLD : undefined, _$p));
+      return _el$19;
     })();
   };
   const section = (title, colour) => (() => {
-    var _el$29 = _$createElement("box"),
-      _el$30 = _$createElement("text");
-    _$insertNode(_el$29, _el$30);
-    _$setProp(_el$29, "marginTop", 1);
-    _$setProp(_el$30, "fg", colour);
-    _$setProp(_el$30, "selectable", false);
-    _$insert(_el$30, title);
-    _$effect(_$p => _$setProp(_el$30, "attributes", TextAttributes.BOLD, _$p));
-    return _el$29;
+    var _el$21 = _$createElement("box"),
+      _el$22 = _$createElement("text");
+    _$insertNode(_el$21, _el$22);
+    _$setProp(_el$21, "marginTop", 1);
+    _$setProp(_el$22, "fg", colour);
+    _$setProp(_el$22, "selectable", false);
+    _$insert(_el$22, title);
+    _$effect(_$p => _$setProp(_el$22, "attributes", TextAttributes.BOLD, _$p));
+    return _el$21;
   })();
   const subheader = title => (() => {
-    var _el$31 = _$createElement("box"),
-      _el$32 = _$createElement("text");
-    _$insertNode(_el$31, _el$32);
-    _$setProp(_el$31, "marginTop", 1);
-    _$setProp(_el$32, "selectable", false);
-    _$insert(_el$32, title);
+    var _el$23 = _$createElement("box"),
+      _el$24 = _$createElement("text");
+    _$insertNode(_el$23, _el$24);
+    _$setProp(_el$23, "marginTop", 1);
+    _$setProp(_el$24, "selectable", false);
+    _$insert(_el$24, title);
     _$effect(_p$ => {
-      var _v$12 = props.context.theme.text.faint,
-        _v$13 = TextAttributes.BOLD;
-      _v$12 !== _p$.e && (_p$.e = _$setProp(_el$32, "fg", _v$12, _p$.e));
-      _v$13 !== _p$.t && (_p$.t = _$setProp(_el$32, "attributes", _v$13, _p$.t));
+      var _v$8 = props.context.theme.text.faint,
+        _v$9 = TextAttributes.BOLD;
+      _v$8 !== _p$.e && (_p$.e = _$setProp(_el$24, "fg", _v$8, _p$.e));
+      _v$9 !== _p$.t && (_p$.t = _$setProp(_el$24, "attributes", _v$9, _p$.t));
       return _p$;
     }, {
       e: undefined,
       t: undefined
     });
-    return _el$31;
+    return _el$23;
   })();
   return (() => {
-    var _el$33 = _$createElement("box"),
-      _el$34 = _$createElement("box"),
-      _el$35 = _$createElement("text"),
-      _el$36 = _$createElement("box"),
-      _el$37 = _$createElement("text"),
-      _el$39 = _$createElement("box"),
-      _el$40 = _$createElement("text"),
-      _el$44 = _$createElement("scrollbox"),
-      _el$45 = _$createElement("box"),
-      _el$46 = _$createElement("text"),
-      _el$52 = _$createElement("text");
-    _$insertNode(_el$33, _el$34);
-    _$insertNode(_el$33, _el$39);
-    _$insertNode(_el$33, _el$44);
-    _$insertNode(_el$33, _el$45);
-    _$insertNode(_el$33, _el$52);
-    _$setProp(_el$33, "flexDirection", "column");
-    _$setProp(_el$33, "width", "100%");
-    _$setProp(_el$33, "paddingX", 2);
-    _$setProp(_el$33, "paddingY", 1);
-    _$insertNode(_el$34, _el$35);
-    _$insertNode(_el$34, _el$36);
-    _$setProp(_el$34, "flexDirection", "row");
-    _$setProp(_el$34, "width", "100%");
-    _$setProp(_el$34, "justifyContent", "space-between");
-    _$setProp(_el$34, "alignItems", "center");
-    _$setProp(_el$35, "selectable", false);
-    _$insert(_el$35, pickerTitle);
-    _$insertNode(_el$36, _el$37);
-    _$setProp(_el$36, "height", 1);
-    _$setProp(_el$36, "onMouseDown", event => {
+    var _el$25 = _$createElement("box"),
+      _el$26 = _$createElement("box"),
+      _el$27 = _$createElement("text"),
+      _el$28 = _$createElement("box"),
+      _el$29 = _$createElement("text"),
+      _el$31 = _$createElement("box"),
+      _el$32 = _$createElement("text"),
+      _el$36 = _$createElement("scrollbox"),
+      _el$37 = _$createElement("box"),
+      _el$38 = _$createElement("text"),
+      _el$42 = _$createElement("text");
+    _$insertNode(_el$25, _el$26);
+    _$insertNode(_el$25, _el$31);
+    _$insertNode(_el$25, _el$36);
+    _$insertNode(_el$25, _el$37);
+    _$insertNode(_el$25, _el$42);
+    _$setProp(_el$25, "flexDirection", "column");
+    _$setProp(_el$25, "width", "100%");
+    _$setProp(_el$25, "paddingX", 2);
+    _$setProp(_el$25, "paddingY", 1);
+    _$insertNode(_el$26, _el$27);
+    _$insertNode(_el$26, _el$28);
+    _$setProp(_el$26, "flexDirection", "row");
+    _$setProp(_el$26, "width", "100%");
+    _$setProp(_el$26, "justifyContent", "space-between");
+    _$setProp(_el$26, "alignItems", "center");
+    _$setProp(_el$27, "selectable", false);
+    _$insert(_el$27, pickerTitle);
+    _$insertNode(_el$28, _el$29);
+    _$setProp(_el$28, "height", 1);
+    _$setProp(_el$28, "onMouseDown", event => {
       if (event.button === 0) props.context.ui.dialog.clear();
     });
-    _$insertNode(_el$37, _$createTextNode(`[esc]`));
-    _$setProp(_el$37, "selectable", false);
-    _$insertNode(_el$39, _el$40);
-    _$setProp(_el$39, "width", "100%");
-    _$setProp(_el$39, "overflow", "hidden");
-    _$insertNode(_el$40, _$createTextNode(`────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────`));
-    _$setProp(_el$40, "wrapMode", "none");
-    _$setProp(_el$40, "selectable", false);
-    _$insert(_el$33, _$createComponent(Show, {
+    _$insertNode(_el$29, _$createTextNode(`[esc]`));
+    _$setProp(_el$29, "selectable", false);
+    _$insertNode(_el$31, _el$32);
+    _$setProp(_el$31, "width", "100%");
+    _$setProp(_el$31, "overflow", "hidden");
+    _$insertNode(_el$32, _$createTextNode(`────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────`));
+    _$setProp(_el$32, "wrapMode", "none");
+    _$setProp(_el$32, "selectable", false);
+    _$insert(_el$25, _$createComponent(Show, {
       get when() {
         return picker() !== null;
       },
       get children() {
-        var _el$42 = _$createElement("box"),
-          _el$43 = _$createElement("input");
-        _$insertNode(_el$42, _el$43);
-        _$setProp(_el$42, "width", "100%");
-        _$setProp(_el$42, "marginTop", 1);
-        _$use(node => searchRef = node ?? undefined, _el$43);
-        _$setProp(_el$43, "width", "100%");
-        _$setProp(_el$43, "value", "");
-        _$setProp(_el$43, "placeholder", "type to filter models…");
-        _$setProp(_el$43, "onInput", value => applyQuery(value));
-        _$effect(_$p => _$setProp(_el$43, "focused", picker() !== null, _$p));
-        return _el$42;
+        var _el$34 = _$createElement("box"),
+          _el$35 = _$createElement("input");
+        _$insertNode(_el$34, _el$35);
+        _$setProp(_el$34, "width", "100%");
+        _$setProp(_el$34, "marginTop", 1);
+        _$use(node => searchRef = node ?? undefined, _el$35);
+        _$setProp(_el$35, "width", "100%");
+        _$setProp(_el$35, "value", "");
+        _$setProp(_el$35, "placeholder", "type to filter models…");
+        _$setProp(_el$35, "onInput", value => applyQuery(value));
+        _$effect(_$p => _$setProp(_el$35, "focused", picker() !== null, _$p));
+        return _el$34;
       }
-    }), _el$44);
-    _$use(node => scrollRef = node ?? undefined, _el$44);
-    _$setProp(_el$44, "width", "100%");
-    _$setProp(_el$44, "scrollY", true);
-    _$setProp(_el$44, "scrollX", false);
-    _$setProp(_el$44, "stickyScroll", false);
-    _$setProp(_el$44, "paddingRight", 1);
-    _$insert(_el$44, _$createComponent(Show, {
+    }), _el$36);
+    _$use(node => scrollRef = node ?? undefined, _el$36);
+    _$setProp(_el$36, "width", "100%");
+    _$setProp(_el$36, "scrollY", true);
+    _$setProp(_el$36, "scrollX", false);
+    _$setProp(_el$36, "stickyScroll", false);
+    _$setProp(_el$36, "paddingRight", 1);
+    _$insert(_el$36, _$createComponent(Show, {
       get when() {
         return picker() === null;
       },
       get fallback() {
         return (() => {
-          var _el$55 = _$createElement("box");
-          _$setProp(_el$55, "flexDirection", "column");
-          _$setProp(_el$55, "width", "100%");
-          _$insert(_el$55, _$createComponent(Show, {
+          var _el$45 = _$createElement("box");
+          _$setProp(_el$45, "flexDirection", "column");
+          _$setProp(_el$45, "width", "100%");
+          _$insert(_el$45, _$createComponent(Show, {
             get when() {
               return flatRefs().length === 0;
             },
             get children() {
-              var _el$56 = _$createElement("box"),
-                _el$57 = _$createElement("text");
-              _$insertNode(_el$56, _el$57);
-              _$setProp(_el$56, "marginTop", 1);
-              _$insertNode(_el$57, _$createTextNode(`no models available`));
-              _$setProp(_el$57, "selectable", false);
-              _$effect(_$p => _$setProp(_el$57, "fg", props.context.theme.text.faint, _$p));
-              return _el$56;
+              var _el$46 = _$createElement("box"),
+                _el$47 = _$createElement("text");
+              _$insertNode(_el$46, _el$47);
+              _$setProp(_el$46, "marginTop", 1);
+              _$insertNode(_el$47, _$createTextNode(`no models available`));
+              _$setProp(_el$47, "selectable", false);
+              _$effect(_$p => _$setProp(_el$47, "fg", props.context.theme.text.faint, _$p));
+              return _el$46;
             }
           }), null);
-          _$insert(_el$55, _$createComponent(Show, {
+          _$insert(_el$45, _$createComponent(Show, {
             get when() {
               return _$memo(() => flatRefs().length > 0)() && visibleRefs().length === 0;
             },
             get children() {
-              var _el$59 = _$createElement("box"),
-                _el$60 = _$createElement("text");
-              _$insertNode(_el$59, _el$60);
-              _$setProp(_el$59, "marginTop", 1);
-              _$setProp(_el$60, "selectable", false);
-              _$insert(_el$60, () => `no matches for "${truncate(query(), 28)}"`);
-              _$effect(_$p => _$setProp(_el$60, "fg", props.context.theme.text.faint, _$p));
-              return _el$59;
+              var _el$49 = _$createElement("box"),
+                _el$50 = _$createElement("text");
+              _$insertNode(_el$49, _el$50);
+              _$setProp(_el$49, "marginTop", 1);
+              _$setProp(_el$50, "selectable", false);
+              _$insert(_el$50, () => `no matches for "${truncate(query(), 28)}"`);
+              _$effect(_$p => _$setProp(_el$50, "fg", props.context.theme.text.faint, _$p));
+              return _el$49;
             }
           }), null);
-          _$insert(_el$55, _$createComponent(For, {
+          _$insert(_el$45, _$createComponent(For, {
             get each() {
               return filteredGroups();
             },
             children: group => (() => {
-              var _el$61 = _$createElement("box"),
-                _el$62 = _$createElement("box"),
-                _el$63 = _$createElement("text");
-              _$insertNode(_el$61, _el$62);
-              _$setProp(_el$61, "flexDirection", "column");
-              _$setProp(_el$61, "width", "100%");
-              _$insertNode(_el$62, _el$63);
-              _$setProp(_el$62, "marginTop", 1);
-              _$setProp(_el$63, "selectable", false);
-              _$insert(_el$63, () => group.provider);
-              _$insert(_el$61, _$createComponent(For, {
+              var _el$51 = _$createElement("box"),
+                _el$52 = _$createElement("box"),
+                _el$53 = _$createElement("text");
+              _$insertNode(_el$51, _el$52);
+              _$setProp(_el$51, "flexDirection", "column");
+              _$setProp(_el$51, "width", "100%");
+              _$insertNode(_el$52, _el$53);
+              _$setProp(_el$52, "marginTop", 1);
+              _$setProp(_el$53, "selectable", false);
+              _$insert(_el$53, () => group.provider);
+              _$insert(_el$51, _$createComponent(For, {
                 get each() {
                   return group.items;
                 },
@@ -1063,32 +958,32 @@ export function SettingsPanel(props) {
                   const focused = () => flat === pickerSel();
                   const isStaged = () => picker()?.staged === ref;
                   return (() => {
-                    var _el$64 = _$createElement("box"),
-                      _el$65 = _$createElement("text"),
-                      _el$66 = _$createElement("text");
-                    _$insertNode(_el$64, _el$65);
-                    _$insertNode(_el$64, _el$66);
-                    _$setProp(_el$64, "id", `choreographer-pick-${flat}`);
-                    _$setProp(_el$64, "flexDirection", "row");
-                    _$setProp(_el$64, "width", "100%");
-                    _$setProp(_el$64, "columnGap", 1);
-                    _$setProp(_el$64, "onMouseDown", event => {
+                    var _el$54 = _$createElement("box"),
+                      _el$55 = _$createElement("text"),
+                      _el$56 = _$createElement("text");
+                    _$insertNode(_el$54, _el$55);
+                    _$insertNode(_el$54, _el$56);
+                    _$setProp(_el$54, "id", `choreographer-pick-${flat}`);
+                    _$setProp(_el$54, "flexDirection", "row");
+                    _$setProp(_el$54, "width", "100%");
+                    _$setProp(_el$54, "columnGap", 1);
+                    _$setProp(_el$54, "onMouseDown", event => {
                       if (event.button !== 0 || event.isDragging) return;
                       clickEntry(flat);
                     });
-                    _$setProp(_el$65, "selectable", false);
-                    _$insert(_el$65, () => focused() ? "▸ " : "  ");
-                    _$setProp(_el$66, "selectable", false);
-                    _$insert(_el$66, () => truncateMiddle(entryLabel, 30));
+                    _$setProp(_el$55, "selectable", false);
+                    _$insert(_el$55, () => focused() ? "▸ " : "  ");
+                    _$setProp(_el$56, "selectable", false);
+                    _$insert(_el$56, () => truncateMiddle(entryLabel, 30));
                     _$effect(_p$ => {
-                      var _v$25 = focused() ? "#c6a0f6" : props.context.theme.text.muted,
-                        _v$26 = focused() ? TextAttributes.BOLD : undefined,
-                        _v$27 = isStaged() ? "#a6e3a1" : props.context.theme.text.base,
-                        _v$28 = focused() || isStaged() ? TextAttributes.BOLD : undefined;
-                      _v$25 !== _p$.e && (_p$.e = _$setProp(_el$65, "fg", _v$25, _p$.e));
-                      _v$26 !== _p$.t && (_p$.t = _$setProp(_el$65, "attributes", _v$26, _p$.t));
-                      _v$27 !== _p$.a && (_p$.a = _$setProp(_el$66, "fg", _v$27, _p$.a));
-                      _v$28 !== _p$.o && (_p$.o = _$setProp(_el$66, "attributes", _v$28, _p$.o));
+                      var _v$19 = focused() ? "#c6a0f6" : props.context.theme.text.muted,
+                        _v$20 = focused() ? TextAttributes.BOLD : undefined,
+                        _v$21 = isStaged() ? "#a6e3a1" : props.context.theme.text.base,
+                        _v$22 = focused() || isStaged() ? TextAttributes.BOLD : undefined;
+                      _v$19 !== _p$.e && (_p$.e = _$setProp(_el$55, "fg", _v$19, _p$.e));
+                      _v$20 !== _p$.t && (_p$.t = _$setProp(_el$55, "attributes", _v$20, _p$.t));
+                      _v$21 !== _p$.a && (_p$.a = _$setProp(_el$56, "fg", _v$21, _p$.a));
+                      _v$22 !== _p$.o && (_p$.o = _$setProp(_el$56, "attributes", _v$22, _p$.o));
                       return _p$;
                     }, {
                       e: undefined,
@@ -1096,24 +991,24 @@ export function SettingsPanel(props) {
                       a: undefined,
                       o: undefined
                     });
-                    return _el$64;
+                    return _el$54;
                   })();
                 }
               }), null);
               _$effect(_p$ => {
-                var _v$23 = props.context.theme.text.faint,
-                  _v$24 = TextAttributes.BOLD;
-                _v$23 !== _p$.e && (_p$.e = _$setProp(_el$63, "fg", _v$23, _p$.e));
-                _v$24 !== _p$.t && (_p$.t = _$setProp(_el$63, "attributes", _v$24, _p$.t));
+                var _v$17 = props.context.theme.text.faint,
+                  _v$18 = TextAttributes.BOLD;
+                _v$17 !== _p$.e && (_p$.e = _$setProp(_el$53, "fg", _v$17, _p$.e));
+                _v$18 !== _p$.t && (_p$.t = _$setProp(_el$53, "attributes", _v$18, _p$.t));
                 return _p$;
               }, {
                 e: undefined,
                 t: undefined
               });
-              return _el$61;
+              return _el$51;
             })()
           }), null);
-          return _el$55;
+          return _el$45;
         })();
       },
       get children() {
@@ -1122,10 +1017,10 @@ export function SettingsPanel(props) {
             return rows();
           },
           children: (row, index) => (() => {
-            var _el$67 = _$createElement("box");
-            _$setProp(_el$67, "flexDirection", "column");
-            _$setProp(_el$67, "width", "100%");
-            _$insert(_el$67, _$createComponent(Show, {
+            var _el$57 = _$createElement("box");
+            _$setProp(_el$57, "flexDirection", "column");
+            _$setProp(_el$57, "width", "100%");
+            _$insert(_el$57, _$createComponent(Show, {
               get when() {
                 return sectionOf(rows()[index() - 1]) !== sectionOf(row);
               },
@@ -1133,21 +1028,7 @@ export function SettingsPanel(props) {
                 return section(SECTIONS[row.kind].title, SECTIONS[row.kind].color);
               }
             }), null);
-            _$insert(_el$67, _$createComponent(Show, {
-              get when() {
-                return _$memo(() => !!(row.kind === "agent" && (index() === 0 || rows()[index() - 1]?.kind !== "agent")))() && SUBAGENT_IDS.every(id => props.disabled().includes(id));
-              },
-              get children() {
-                var _el$68 = _$createElement("box"),
-                  _el$69 = _$createElement("text");
-                _$insertNode(_el$68, _el$69);
-                _$insertNode(_el$69, _$createTextNode(`all subagents off — orchestrator runs alone`));
-                _$setProp(_el$69, "selectable", false);
-                _$effect(_$p => _$setProp(_el$69, "fg", props.context.theme.text.faint, _$p));
-                return _el$68;
-              }
-            }), null);
-            _$insert(_el$67, _$createComponent(Show, {
+            _$insert(_el$57, _$createComponent(Show, {
               get when() {
                 return _$memo(() => groupOf(row) !== null)() && groupOf(rows()[index() - 1]) !== groupOf(row);
               },
@@ -1155,116 +1036,107 @@ export function SettingsPanel(props) {
                 return subheader(groupLabelFor(groupOf(row)));
               }
             }), null);
-            _$insert(_el$67, () => rowLine(row, index()), null);
-            _$effect(_$p => _$setProp(_el$67, "id", `choreographer-row-${index()}`, _$p));
-            return _el$67;
+            _$insert(_el$57, () => rowLine(row, index()), null);
+            _$effect(_$p => _$setProp(_el$57, "id", `choreographer-row-${index()}`, _$p));
+            return _el$57;
           })()
         });
       }
     }));
-    _$insertNode(_el$45, _el$46);
-    _$setProp(_el$45, "marginTop", 1);
-    _$setProp(_el$45, "width", "100%");
-    _$setProp(_el$45, "overflow", "hidden");
-    _$insertNode(_el$46, _$createTextNode(`────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────`));
-    _$setProp(_el$46, "wrapMode", "none");
-    _$setProp(_el$46, "selectable", false);
-    _$insert(_el$33, _$createComponent(Show, {
+    _$insertNode(_el$37, _el$38);
+    _$setProp(_el$37, "marginTop", 1);
+    _$setProp(_el$37, "width", "100%");
+    _$setProp(_el$37, "overflow", "hidden");
+    _$insertNode(_el$38, _$createTextNode(`────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────`));
+    _$setProp(_el$38, "wrapMode", "none");
+    _$setProp(_el$38, "selectable", false);
+    _$insert(_el$25, _$createComponent(Show, {
       get when() {
         return picker() === null;
       },
       get fallback() {
         return (() => {
-          var _el$71 = _$createElement("box"),
-            _el$72 = _$createElement("text"),
-            _el$74 = _$createElement("text");
-          _$insertNode(_el$71, _el$72);
-          _$insertNode(_el$71, _el$74);
-          _$setProp(_el$71, "flexDirection", "column");
-          _$setProp(_el$71, "width", "100%");
-          _$insertNode(_el$72, _$createTextNode(`↑↓ move · enter confirm · esc clear / back`));
-          _$setProp(_el$72, "wrapMode", "none");
-          _$setProp(_el$72, "selectable", false);
-          _$insertNode(_el$74, _$createTextNode(`click confirms · wheel scrolls · type filters`));
-          _$setProp(_el$74, "wrapMode", "none");
-          _$setProp(_el$74, "selectable", false);
-          _$insert(_el$71, _$createComponent(Show, {
+          var _el$58 = _$createElement("box"),
+            _el$59 = _$createElement("text"),
+            _el$61 = _$createElement("text");
+          _$insertNode(_el$58, _el$59);
+          _$insertNode(_el$58, _el$61);
+          _$setProp(_el$58, "flexDirection", "column");
+          _$setProp(_el$58, "width", "100%");
+          _$insertNode(_el$59, _$createTextNode(`↑↓ move · enter confirm · esc clear / back`));
+          _$setProp(_el$59, "wrapMode", "none");
+          _$setProp(_el$59, "selectable", false);
+          _$insertNode(_el$61, _$createTextNode(`click confirms · wheel scrolls · type filters`));
+          _$setProp(_el$61, "wrapMode", "none");
+          _$setProp(_el$61, "selectable", false);
+          _$insert(_el$58, _$createComponent(Show, {
             get when() {
               return (picker()?.ids.length ?? 0) > 1;
             },
             get children() {
-              var _el$76 = _$createElement("text");
-              _$setProp(_el$76, "wrapMode", "none");
-              _$setProp(_el$76, "selectable", false);
-              _$insert(_el$76, () => `enter applies to all ${picker()?.ids.length} in group`);
-              _$effect(_$p => _$setProp(_el$76, "fg", props.context.theme.text.faint, _$p));
-              return _el$76;
+              var _el$63 = _$createElement("text");
+              _$setProp(_el$63, "wrapMode", "none");
+              _$setProp(_el$63, "selectable", false);
+              _$insert(_el$63, () => `enter applies to all ${picker()?.ids.length} in group`);
+              _$effect(_$p => _$setProp(_el$63, "fg", props.context.theme.text.faint, _$p));
+              return _el$63;
             }
           }), null);
           _$effect(_p$ => {
-            var _v$29 = props.context.theme.text.faint,
-              _v$30 = props.context.theme.text.faint;
-            _v$29 !== _p$.e && (_p$.e = _$setProp(_el$72, "fg", _v$29, _p$.e));
-            _v$30 !== _p$.t && (_p$.t = _$setProp(_el$74, "fg", _v$30, _p$.t));
+            var _v$23 = props.context.theme.text.faint,
+              _v$24 = props.context.theme.text.faint;
+            _v$23 !== _p$.e && (_p$.e = _$setProp(_el$59, "fg", _v$23, _p$.e));
+            _v$24 !== _p$.t && (_p$.t = _$setProp(_el$61, "fg", _v$24, _p$.t));
             return _p$;
           }, {
             e: undefined,
             t: undefined
           });
-          return _el$71;
+          return _el$58;
         })();
       },
       get children() {
-        return [(() => {
-          var _el$48 = _$createElement("text");
-          _$insertNode(_el$48, _$createTextNode(`↑↓ move · ←→ adjust · enter pick · space on/off · r reset · esc close`));
-          _$setProp(_el$48, "wrapMode", "none");
-          _$setProp(_el$48, "selectable", false);
-          _$effect(_$p => _$setProp(_el$48, "fg", props.context.theme.text.faint, _$p));
-          return _el$48;
-        })(), (() => {
-          var _el$50 = _$createElement("text");
-          _$insertNode(_el$50, _$createTextNode(`click checkbox toggles`));
-          _$setProp(_el$50, "wrapMode", "none");
-          _$setProp(_el$50, "selectable", false);
-          _$effect(_$p => _$setProp(_el$50, "fg", props.context.theme.text.faint, _$p));
-          return _el$50;
-        })()];
+        var _el$40 = _$createElement("text");
+        _$insertNode(_el$40, _$createTextNode(`↑↓ move · ←→ adjust · enter pick · r reset · esc close`));
+        _$setProp(_el$40, "wrapMode", "none");
+        _$setProp(_el$40, "selectable", false);
+        _$effect(_$p => _$setProp(_el$40, "fg", props.context.theme.text.faint, _$p));
+        return _el$40;
       }
-    }), _el$52);
-    _$setProp(_el$52, "selectable", false);
-    _$insert(_el$52, () => props.online() ? "plugin connected" : "plugin unreachable: local only");
-    _$insert(_el$33, _$createComponent(Show, {
+    }), _el$42);
+    _$setProp(_el$42, "selectable", false);
+    _$insert(_el$42, () => props.online() ? "plugin connected" : "plugin unreachable: local only");
+    _$insert(_el$25, _$createComponent(Show, {
       get when() {
         return _$memo(() => picker() !== null)() && !props.online();
       },
       get children() {
-        var _el$53 = _$createElement("text");
-        _$insertNode(_el$53, _$createTextNode(`read-only while offline`));
-        _$setProp(_el$53, "selectable", false);
-        _$effect(_$p => _$setProp(_el$53, "fg", props.context.theme.text.faint, _$p));
-        return _el$53;
+        var _el$43 = _$createElement("text");
+        _$insertNode(_el$43, _$createTextNode(`read-only while offline`));
+        _$setProp(_el$43, "selectable", false);
+        _$effect(_$p => _$setProp(_el$43, "fg", props.context.theme.text.faint, _$p));
+        return _el$43;
       }
     }), null);
     _$effect(_p$ => {
-      var _v$14 = props.context.theme.text.base,
-        _v$15 = TextAttributes.BOLD,
-        _v$16 = props.context.theme.text.muted,
-        _v$17 = TextAttributes.BOLD,
-        _v$18 = props.context.theme.text.faint,
-        _v$19 = Math.min(picker() === null ? rows().length + 6 : groups().length + flatRefs().length + 3, viewportHeight()),
-        _v$20 = picker() === null ? 0 : 1,
-        _v$21 = props.context.theme.text.faint,
-        _v$22 = props.online() ? "#a6e3a1" : "#f5a97f";
-      _v$14 !== _p$.e && (_p$.e = _$setProp(_el$35, "fg", _v$14, _p$.e));
-      _v$15 !== _p$.t && (_p$.t = _$setProp(_el$35, "attributes", _v$15, _p$.t));
-      _v$16 !== _p$.a && (_p$.a = _$setProp(_el$37, "fg", _v$16, _p$.a));
-      _v$17 !== _p$.o && (_p$.o = _$setProp(_el$37, "attributes", _v$17, _p$.o));
-      _v$18 !== _p$.i && (_p$.i = _$setProp(_el$40, "fg", _v$18, _p$.i));
-      _v$19 !== _p$.n && (_p$.n = _$setProp(_el$44, "height", _v$19, _p$.n));
-      _v$20 !== _p$.s && (_p$.s = _$setProp(_el$44, "marginTop", _v$20, _p$.s));
-      _v$21 !== _p$.h && (_p$.h = _$setProp(_el$46, "fg", _v$21, _p$.h));
-      _v$22 !== _p$.r && (_p$.r = _$setProp(_el$52, "fg", _v$22, _p$.r));
+      var _v$0 = props.context.theme.text.base,
+        _v$1 = TextAttributes.BOLD,
+        _v$10 = props.context.theme.text.muted,
+        _v$11 = TextAttributes.BOLD,
+        _v$12 = props.context.theme.text.faint,
+        _v$13 = Math.min(picker() === null ? rows().length + 6 : groups().length + flatRefs().length + 3, viewportHeight()),
+        _v$14 = picker() === null ? 0 : 1,
+        _v$15 = props.context.theme.text.faint,
+        _v$16 = props.online() ? "#a6e3a1" : "#f5a97f";
+      _v$0 !== _p$.e && (_p$.e = _$setProp(_el$27, "fg", _v$0, _p$.e));
+      _v$1 !== _p$.t && (_p$.t = _$setProp(_el$27, "attributes", _v$1, _p$.t));
+      _v$10 !== _p$.a && (_p$.a = _$setProp(_el$29, "fg", _v$10, _p$.a));
+      _v$11 !== _p$.o && (_p$.o = _$setProp(_el$29, "attributes", _v$11, _p$.o));
+      _v$12 !== _p$.i && (_p$.i = _$setProp(_el$32, "fg", _v$12, _p$.i));
+      _v$13 !== _p$.n && (_p$.n = _$setProp(_el$36, "height", _v$13, _p$.n));
+      _v$14 !== _p$.s && (_p$.s = _$setProp(_el$36, "marginTop", _v$14, _p$.s));
+      _v$15 !== _p$.h && (_p$.h = _$setProp(_el$38, "fg", _v$15, _p$.h));
+      _v$16 !== _p$.r && (_p$.r = _$setProp(_el$42, "fg", _v$16, _p$.r));
       return _p$;
     }, {
       e: undefined,
@@ -1277,6 +1149,6 @@ export function SettingsPanel(props) {
       h: undefined,
       r: undefined
     });
-    return _el$33;
+    return _el$25;
   })();
 }

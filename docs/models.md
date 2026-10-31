@@ -14,6 +14,6 @@ Before a subagent is spawned the plugin picks the first model that is not marked
 
 That re-run only covers a call that waits for the child. A background call returns its sessionID before the child runs, so a failure inside the child surfaces in the child session, not as a thrown spawn error, and the parent sees the sessionID; the failed background child is not re-run on the fallback. Failures in any session still go through the same retry hook, so once the model is marked down, later spawns route to the fallback. An agent with no configured fallback keeps the host's retry behavior: the plugin neither forces nor vetoes retries for it.
 
-The read-only `fallback_status` tool reports each managed agent's primary model, its dialog fallbacks, and whether any model is down or degraded, so you can tell which model a worker will use before spawning it. See [tools](tools.md) for its output shape.
+The read-only `fallback_status` tool reports each subagent's primary model, its dialog fallbacks, and whether any model is down or degraded, so you can tell which model a worker will use before spawning it. See [tools](tools.md) for its output shape.
 
 An agent with no configured model inherits the parent session model. When that inherited default is a free-tier model, quota failures hit every spawn, and without a fallback there is nothing to switch to. Set a fallback before relying on that setup.

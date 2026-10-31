@@ -31,7 +31,6 @@ export default Plugin.define({
       console.warn('openchoreographer: the "fallback" plugin option is ignored; configure fallback models in /choreographer')
     }
     const registrations: Registration[] = []
-    const managedIds = [...new Set([options.agent, ...AGENT_IDS])].filter((id) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id))
     const subagents = SUBAGENT_IDS
     let disposed = false
     try {
@@ -45,11 +44,8 @@ export default Plugin.define({
       const normalized = normalizeSettings(stored)
       const settings = { current: normalized }
       const getModels = (): ModelSettings => settings.current.models
-      const getDisabled = (): string[] => settings.current.disabled
-      let agentRegistration: Awaited<ReturnType<typeof registerChoreographerAgents>> | undefined
       try {
-        agentRegistration = await registerChoreographerAgents(ctx, () => settings.current.disabled)
-        registrations.push(agentRegistration)
+        registrations.push(await registerChoreographerAgents(ctx))
       } catch (error) {
         console.warn(`openchoreographer: agent registration failed: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -87,11 +83,9 @@ export default Plugin.define({
         return {
           animations: settings.current.animations,
           ui: settings.current.ui,
-          managed: managedIds,
           models,
           configured: await loadConfigured(),
           subagents: [...subagents],
-          disabled: [...settings.current.disabled],
           maxParallel: settings.current.maxParallel,
           routing,
         }
@@ -102,21 +96,8 @@ export default Plugin.define({
           return snapshot()
         },
         setSettings: async (input) => {
-          const next = mergeSettings(settings.current, input)
-          const disabledChanged =
-            typeof input === "object" &&
-            input !== null &&
-            Array.isArray((input as { disabled?: unknown }).disabled) &&
-            JSON.stringify(settings.current.disabled) !== JSON.stringify(next.disabled)
-          settings.current = next
+          settings.current = mergeSettings(settings.current, input)
           await ctx.storage.set(SETTINGS_KEY, settings.current)
-          if (disabledChanged && agentRegistration !== undefined) {
-            try {
-              await ctx.agent.reload()
-            } catch (error) {
-              console.warn(`openchoreographer: agent reload failed: ${error instanceof Error ? error.message : String(error)}`)
-            }
-          }
           const snap = await snapshot()
           if (emitUpdated) await emitUpdated(snap)
           return snap
@@ -181,18 +162,18 @@ export default Plugin.define({
       })
       registrations.push(await retryHook(ctx, getModels))
 
-      registrations.push(await subagentBeforeHook(ctx, getModels, getDisabled))
+      registrations.push(await subagentBeforeHook(ctx, getModels))
 
       registrations.push(await subagentAfterHook(ctx))
 
       registrations.push(await outputClipHook(ctx))
 
-      registrations.push(await subagentTransform(ctx, getModels, getDisabled))
+      registrations.push(await subagentTransform(ctx, getModels))
 
       const listed = await ctx.agent.list({ location: ctx.location }).catch(() => undefined)
       if (listed) {
         const ids = listed.data.map((agent) => agent.id)
-        const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id) && !settings.current.disabled.includes(id)) : []
+        const missing = ids.length > 0 ? AGENT_IDS.filter((id) => !ids.includes(id)) : []
         if (missing.length > 0) {
           console.warn("openchoreographer: agent definitions not registered: " + missing.join(", ") + ". Restart OpenCode or run /reload.")
         }
@@ -209,9 +190,9 @@ export default Plugin.define({
 
       registrations.push(await fallbackStatusTool(ctx, health, getModels))
 
-      registrations.push(await commands(ctx, options, getDisabled))
+      registrations.push(await commands(ctx, options))
 
-      registrations.push(await contextHook(ctx, options, getDisabled, () => settings.current.maxParallel))
+      registrations.push(await contextHook(ctx, options, () => settings.current.maxParallel))
 
       if (generation !== epoch) {
         const stale = [...registrations].reverse()

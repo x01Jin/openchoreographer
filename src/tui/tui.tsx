@@ -40,15 +40,13 @@ export default Plugin.define({
       void setSettings((draft) => {
         const existing = (draft as { ui?: Partial<Ui> }).ui
         draft.ui = {
-          todos: typeof existing?.todos === "boolean" ? existing.todos : true,
+          todos: typeof existing?.todos === "boolean" ? existing.todos : false,
           roster: typeof existing?.roster === "boolean" ? existing.roster : true,
         }
       })
     }
-    const [managed, setManaged] = createSignal<string[]>([])
     const [configured, setConfigured] = createSignal<Record<string, string | null>>({})
     const [subagents, setSubagents] = createSignal<string[]>([])
-    const [disabled, setDisabled] = createSignal<string[]>([])
     const [routing, setRouting] = createSignal<Record<string, { model: string; fallback: boolean }>>({})
     const [switchArmed, setSwitchArmed] = createSignal<{ session: string; agent: string } | undefined>(undefined)
     const [switchBusyMap, setSwitchBusyMap] = createSignal<Record<string, boolean>>({})
@@ -86,15 +84,11 @@ export default Plugin.define({
     const applySnapshot = (value: unknown) => {
       const snap = normalizeSnapshot(value)
       if (snap === undefined) return
-      const currentManaged = managed()
-      const managedSame =
-        currentManaged.length === snap.managed.length &&
-        snap.managed.every((id, index) => currentManaged[index] === id)
       const animationsSame =
         settings.animations.todo === snap.animations.todo &&
         settings.animations.running === snap.animations.running
       const uiSame =
-        (settings.ui?.todos ?? true) === snap.ui.todos &&
+        (settings.ui?.todos ?? false) === snap.ui.todos &&
         (settings.ui?.roster ?? true) === snap.ui.roster
       const currentModels = settings.models ?? { primary: {}, fallback: {} }
       const modelsSame =
@@ -105,13 +99,9 @@ export default Plugin.define({
       const subagentsSame =
         currentSubagents.length === snap.subagents.length &&
         snap.subagents.every((id, index) => currentSubagents[index] === id)
-      const currentDisabled = disabled()
-      const disabledSame =
-        currentDisabled.length === snap.disabled.length &&
-        snap.disabled.every((id, index) => currentDisabled[index] === id)
       const maxParallelSame = settings.maxParallel === snap.maxParallel
       const routingCheckSame = routingSame(routing(), snap.routing)
-      if (animationsSame && uiSame && managedSame && modelsSame && configuredSame && subagentsSame && disabledSame && maxParallelSame && routingCheckSame) return
+      if (animationsSame && uiSame && modelsSame && configuredSame && subagentsSame && maxParallelSame && routingCheckSame) return
       batch(() => {
         void setSettings((draft) => {
           draft.animations = { todo: snap.animations.todo, running: snap.animations.running }
@@ -119,10 +109,8 @@ export default Plugin.define({
           draft.models = { primary: { ...snap.models.primary }, fallback: copyFallback(snap.models.fallback) }
           draft.maxParallel = snap.maxParallel
         })
-        setManaged([...snap.managed])
         setConfigured({ ...snap.configured })
         setSubagents([...snap.subagents])
-        setDisabled([...snap.disabled])
         setRouting({ ...snap.routing })
         bump()
       })
@@ -174,10 +162,10 @@ export default Plugin.define({
     }
 
     const toggleUi = (key: "todos" | "roster") => {
-      const value = !(settings.ui?.[key] ?? true)
+      const value = !(settings.ui?.[key] ?? (key === "todos" ? false : true))
       mutation += 1
       void setSettings((draft) => {
-        draft.ui = { ...(draft.ui ?? { todos: true, roster: true }), [key]: value }
+        draft.ui = { ...(draft.ui ?? { todos: false, roster: true }), [key]: value }
       })
       bump()
       inflight += 1
@@ -283,23 +271,6 @@ export default Plugin.define({
 
     const agentById = (id: string): AgentInfo | undefined => (agentList() ?? []).find((agent) => agent.id === id)
 
-    const toggleAgent = (id: string): void => {
-      const prev = disabled()
-      const next = prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]
-      mutation += 1
-      const at = mutation
-      setDisabled([...next])
-      bump()
-      inflight += 1
-      void rpc.setSettings({ disabled: next }, callOptions).then((snap) => {
-        if (at === mutation) applySnapshot(snap)
-      }).catch(() => {
-        setOnline(false)
-        context.ui.toast.show({ message: "Could not save subagent toggle: server plugin unreachable", variant: "warning" })
-        void syncSettings(false)
-      }).finally(settle)
-    }
-
     const isSwitchPending = (agent: AgentInfo): boolean => {
       const armed = switchArmed()
       return armed !== undefined && armed.session === currentSession() && armed.agent === agent.id
@@ -345,7 +316,6 @@ export default Plugin.define({
         <SettingsPanel
           context={context}
           settings={settings}
-          managed={managed}
           online={online}
           agentById={agentById}
           toggleAnimation={toggleAnimation}
@@ -355,8 +325,6 @@ export default Plugin.define({
           modelSettings={modelSettings}
           configured={configured}
           subagents={subagents}
-          disabled={disabled}
-          toggleAgent={toggleAgent}
           savePrimary={savePrimary}
           saveFallback={saveFallback}
         />
@@ -394,7 +362,7 @@ export default Plugin.define({
       return index
     })
     const subagentList = createMemo((): AgentInfo[] => {
-      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent" && SUBAGENT_IDS.includes(agent.id) && !disabled().includes(agent.id)).sort((a, b) => a.name.localeCompare(b.name))
+      return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode === "subagent" && SUBAGENT_IDS.includes(agent.id)).sort((a, b) => a.name.localeCompare(b.name))
     })
     const primary = createMemo((): AgentInfo[] => {
       return (agentList() ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent").sort((a, b) => a.name.localeCompare(b.name))
@@ -485,7 +453,7 @@ export default Plugin.define({
     createEffect(() => {
       const sessionID = todoAnimFor()
       const active =
-        sessionID !== undefined && (settings.ui?.todos ?? true) && settings.animations.todo && isOpen(sessionID, "todos") && todoItems(sessionID).some((item) => item.status === "in_progress")
+        sessionID !== undefined && (settings.ui?.todos ?? false) && settings.animations.todo && isOpen(sessionID, "todos") && todoItems(sessionID).some((item) => item.status === "in_progress")
       if (active && todoTimer === undefined) {
         todoTimer = setInterval(() => {
           setTodoPhase((value) => value + 3)

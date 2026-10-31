@@ -1,6 +1,6 @@
 {
   "name": "openchoreographer",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "A lightweight OpenCode V2 orchestrator plugin with worker and reviewer subagents that outputs quality without eating too much usage",
   "type": "module",
   "license": "MIT",
@@ -32,8 +32,7 @@
     "test": "node --import tsx --test tests/fallback.test.ts tests/shared.test.ts tests/diff.test.ts tests/settings.test.ts tests/agents.test.ts tests/clip.test.ts",
     "build:tui": "node --import tsx scripts/build-tui.ts",
     "check:tui": "node --import tsx scripts/build-tui.ts --check",
-    "prepublishOnly": "npm run typecheck && npm test",
-    "prepack": "npm run build:tui"
+    "prepublishOnly": "npm run build:tui && npm run typecheck && npm test"
   },
   "dependencies": {
     "@opencode/plugin": "2.2.2"

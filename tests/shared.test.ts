@@ -184,8 +184,8 @@ describe("validateDiffInput", () => {
 })
 
 describe("normalizeOptions", () => {
-  test("defaults to orchestrator / 2", () => {
-    const expected = { agent: "orchestrator", maxReviewers: 2 }
+  test("defaults to orchestrator / 1", () => {
+    const expected = { agent: "orchestrator", maxReviewers: 1 }
     assert.deepEqual(normalizeOptions(undefined), expected)
     assert.deepEqual(normalizeOptions({}), expected)
   })
@@ -200,8 +200,8 @@ describe("normalizeOptions", () => {
 
   test("non-numeric values fall back to the defaults", () => {
     muted(() => {
-      assert.equal(normalizeOptions({ maxReviewers: "3" }).maxReviewers, 2)
-      assert.equal(normalizeOptions({ maxReviewers: Number.NEGATIVE_INFINITY }).maxReviewers, 2)
+      assert.equal(normalizeOptions({ maxReviewers: "3" }).maxReviewers, 1)
+      assert.equal(normalizeOptions({ maxReviewers: Number.NEGATIVE_INFINITY }).maxReviewers, 1)
     })
   })
 
@@ -272,35 +272,12 @@ describe("buildReviewBrief", () => {
     }
   })
 
-  test("a disabled reviewer returns the unavailable message", () => {
-    const brief = buildReviewBrief(options(), ["reviewer"])
-    assert.equal(brief, `The review panel is unavailable because the "reviewer" subagent is disabled in /choreographer. Enable it to run /review-panel.`)
-  })
-
-  test("a disabled reviewer-security omits its routing sentence", () => {
-    const brief = buildReviewBrief(options(), ["reviewer-security"])
-    assert.doesNotMatch(brief, /Route `reviewer-security` as well/)
-    assert.match(brief, /Run a strict review panel on the current changes\./)
-  })
-
-  test("with no disabled subagents the current text is kept", () => {
-    const brief = buildReviewBrief(options())
-    assert.equal(brief, buildReviewBrief(options(), ["backend"]))
-    assert.match(brief, /1\. Inspect/)
-    assert.match(brief, /2\. Always run/)
-    assert.match(brief, /3\. Route/)
-    assert.match(brief, /4\. Route `reviewer-security`/)
-    assert.match(brief, /5\. Launch/)
-    assert.match(brief, /6\. When a reviewer returns findings/)
-    assert.match(brief, /7\. If a reviewer/)
-  })
-
   test("lists every lens id and label", () => {
     for (const maxReviewers of [1, 3]) {
       const brief = buildReviewBrief(options({ maxReviewers }))
       for (const lens of LENSES) {
         assert.ok(brief.includes(lens.id), `maxReviewers ${maxReviewers}: missing lens id ${lens.id}`)
-        assert.match(brief, new RegExp(`^${lens.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — ${lens.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${lens.focus[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"))
+        assert.match(brief, new RegExp(`^${lens.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: ${lens.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"))
       }
     }
   })
@@ -308,18 +285,10 @@ describe("buildReviewBrief", () => {
 
 describe("buildDelegationText", () => {
   test("states the configured maxParallel number", () => {
-    assert.match(buildDelegationText(options(), [], 6), /keeping at most 6 background subagents at once/)
-    assert.match(buildDelegationText(options(), [], 1), /keeping at most 1 background subagents at once/)
+    assert.match(buildDelegationText(options(), 6), /at most 6 children at once/)
+    assert.match(buildDelegationText(options(), 1), /at most 1 children at once/)
   })
 
-  test("with a disabled list the line appears with the ids", () => {
-    const text = buildDelegationText(options(), ["backend", "frontend"])
-    assert.match(text, /Disabled subagents \(do not delegate; ignore their instructions\): backend, frontend\./)
-  })
-
-  test("with an empty list the disabled line is absent", () => {
-    assert.doesNotMatch(buildDelegationText(options()), /Disabled subagents/)
-  })
 })
 
 describe("shouldRefreshSidebar", () => {

@@ -43,15 +43,15 @@ describe("clipShellOutput", () => {
   test("returns text at or under the limit unchanged", () => {
     assert.deepEqual(clipShellOutput(""), { text: "", dropped: 0 });
     assert.deepEqual(clipShellOutput("short output"), { text: "short output", dropped: 0 });
-    const exact = "a".repeat(8_000);
+    const exact = "a".repeat(6_000);
     assert.deepEqual(clipShellOutput(exact), { text: exact, dropped: 0 });
   });
 
   test("never exceeds the default limit", () => {
     const text = shellOutput();
-    assert.ok(text.length > 8_000, `fixture is only ${text.length} chars`);
+    assert.ok(text.length > 6_000, `fixture is only ${text.length} chars`);
     const out = clipShellOutput(text).text;
-    assert.ok(out.length <= 8_000, `got ${out.length}`);
+    assert.ok(out.length <= 6_000, `got ${out.length}`);
     assert.match(out, SHELL_MARKER);
   });
 
@@ -80,12 +80,12 @@ describe("clipShellOutput", () => {
     assert.ok(matched !== null, "missing drop marker");
     const kept = out.length - matched[0].length;
     assert.equal(Number(matched[1]), text.length - kept);
-    assert.equal(Number(matched[2]), 8_000);
+    assert.equal(Number(matched[2]), 6_000);
   });
 
   test("never splits a surrogate pair into a lone surrogate", () => {
     const text = "🙂".repeat(6_000);
-    for (const limit of [0, 1, 2, 40, 80, 1_000, 8_000]) {
+    for (const limit of [0, 1, 2, 40, 80, 1_000, 6_000]) {
       const out = clipShellOutput(text, limit).text;
       assert.ok(out.length <= limit, `limit ${limit}: got ${out.length}`);
       assert.deepEqual(loneSurrogates(out), [], `limit ${limit}`);
@@ -96,7 +96,7 @@ describe("clipShellOutput", () => {
     const noisy = Array.from({ length: 400 }, (_, index) => `\u001B[32m+ ok ${index}\u001B[0m\u0000\u0007 ${"y".repeat(30)}`);
     const text = noisy.join("\n");
     const out = clipShellOutput(text).text;
-    assert.ok(out.length <= 8_000, `got ${out.length}`);
+    assert.ok(out.length <= 6_000, `got ${out.length}`);
     assert.ok(!out.includes("\u001B"), "ANSI escape survived");
     assert.equal(C0.test(out), false, "C0 control survived");
     assert.match(out, SHELL_MARKER);
@@ -110,15 +110,15 @@ describe("clipShellParts", () => {
     const parts = Array.from({ length: 5 }, () => ({ type: "text", text: "p".repeat(7_000) }));
     const out = clipShellParts(parts);
     const total = out.parts.reduce((sum, part) => sum + (part.text?.length ?? 0), 0);
-    assert.ok(total <= 8_000, `total is ${total}`);
+    assert.ok(total <= 6_000, `total is ${total}`);
     assert.equal(out.dropped, 35_000 - total);
-    assert.match(out.parts[1].text ?? "", SHELL_MARKER);
+    assert.ok(out.parts.some((part) => SHELL_MARKER.test(part.text ?? "")), "missing drop marker");
   });
 
   test("labels the marker with the whole-call cap", () => {
     const parts = Array.from({ length: 5 }, () => ({ type: "text", text: "p".repeat(7_000) }));
     const out = clipShellParts(parts);
-    assert.match(out.parts[1].text ?? "", /\(shell output over 8000\)/);
+    assert.ok(out.parts.some((part) => /\(shell output over 6000\)/.test(part.text ?? "")), "missing whole-call cap label");
   });
 
   test("keeps non-text parts and leaves short text parts untouched", () => {
@@ -138,7 +138,7 @@ describe("clipShellParts", () => {
     const parts: ShellPart[] = [big, file];
     const out = clipShellParts(parts);
     assert.equal(out.parts[1], file);
-    assert.ok((out.parts[0].text ?? "").length <= 8_000);
+    assert.ok((out.parts[0].text ?? "").length <= 6_000);
     assert.ok(out.dropped > 0);
   });
 });
@@ -146,14 +146,14 @@ describe("clipShellParts", () => {
 describe("clipSubagentReports", () => {
   test("clips a real host report and keeps both tags", () => {
     const report = longReport();
-    assert.ok(report.length > 2_500, `fixture is only ${report.length} chars`);
+    assert.ok(report.length > 2_000, `fixture is only ${report.length} chars`);
     const message = { role: "user", content: [{ type: "text", text: report }] };
     const out = clipSubagentReports([message]);
     assert.equal(out.clipped, 1);
     const text = out.messages[0].content[0].text ?? "";
     assert.ok(text.startsWith('<subagent sessionID="ses_abc123"'), "head lost the opening tag");
     assert.ok(text.endsWith("</subagent>"), "tail lost the closing tag");
-    assert.ok(text.length <= 2_500, `got ${text.length}`);
+    assert.ok(text.length <= 2_000, `got ${text.length}`);
     assert.match(text, REPORT_MARKER);
     assert.equal(out.messages[0].role, "user");
     const matched = text.match(REPORT_MARKER);
@@ -234,7 +234,7 @@ describe("clipSubagentReports", () => {
     const message = { role: "user", content: [{ type: "text", text: report }] };
     const out = clipSubagentReports([message]);
     assert.equal(out.clipped, 1);
-    assert.ok((out.messages[0].content[0].text ?? "").length <= 2_500);
+    assert.ok((out.messages[0].content[0].text ?? "").length <= 2_000);
   });
 
   test("leaves a message with more than one text part untouched", () => {
@@ -251,8 +251,8 @@ describe("clipSubagentReports", () => {
     const plain = { role: "user", content: [{ type: "text", text: "short" }] };
     const out = clipSubagentReports([first, plain, second]);
     assert.equal(out.clipped, 2);
-    assert.ok((out.messages[0].content[0].text ?? "").length <= 2_500);
-    assert.ok((out.messages[2].content[0].text ?? "").length <= 2_500);
+    assert.ok((out.messages[0].content[0].text ?? "").length <= 2_000);
+    assert.ok((out.messages[2].content[0].text ?? "").length <= 2_000);
     assert.equal(out.messages[1], plain);
   });
 });
@@ -267,9 +267,9 @@ describe("hardened shell sanitization", () => {
     const head = `${ESC}]0;my title${BEL}first line\n`;
     const body = Array.from({ length: 400 }, (_, index) => `${ESC}[?25l${OVR}line ${index} ${ZWJ}${"y".repeat(30)}`);
     const text = `${head}${body.join("\n")}\nlast`;
-    assert.ok(text.length > 8_000, `fixture is only ${text.length} chars`);
+    assert.ok(text.length > 6_000, `fixture is only ${text.length} chars`);
     const out = clipShellOutput(text).text;
-    assert.ok(out.length <= 8_000, `got ${out.length}`);
+    assert.ok(out.length <= 6_000, `got ${out.length}`);
     assert.ok(!out.includes(ESC), "escape survived");
     assert.ok(!out.includes(BEL), "BEL survived");
     assert.ok(!out.includes(OVR), "bidi override survived");
@@ -303,7 +303,7 @@ describe("prototype-preserving report copies", () => {
     assert.deepEqual(Object.keys(copy).sort(), Object.keys(message).sort());
     assert.equal(copy.summary(), "user:1");
     assert.equal(copy.tag, "host-field");
-    assert.ok((copy.content[0].text ?? "").length <= 2_500);
+    assert.ok((copy.content[0].text ?? "").length <= 2_000);
     assert.equal(message.content[0].text, full);
   });
 });
@@ -317,7 +317,7 @@ describe("broadened decision and credential guards", () => {
       const message = { role: "user", content: [{ type: "text", text: report }] };
       const out = clipSubagentReports([message]);
       assert.equal(out.clipped, 1, empty);
-      assert.ok((out.messages[0].content[0].text ?? "").length <= 2_500, empty);
+      assert.ok((out.messages[0].content[0].text ?? "").length <= 2_000, empty);
     }
   });
 

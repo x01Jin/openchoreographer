@@ -24,7 +24,7 @@ npm test
 
 ## Agent registration
 
-`src/server/agent-source.ts` parses `agents/*.md` at setup, converts the native `permissions` list, and registers every definition through `ctx.agent.transform`. Disabling a subagent removes it from the editor and calls `ctx.agent.reload()`; no file moves, no `.disabled` copies, no orchestrator sidecars.
+`src/server/agent-source.ts` parses `agents/*.md` at setup, converts the native `permissions` list, and registers every definition through `ctx.agent.transform`. All fourteen agents are always registered.
 
 Agent ids and definitions are duplicated in `src/shared/agents.ts`, `agents/*.md`, the [roster table](roster.md), and `tests/agents.test.ts` (exactly 14 `.md` files). Update all of them together.
 

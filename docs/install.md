@@ -16,7 +16,7 @@ OpenCode stores npm plugins under `~/.cache/opencode/npm/<package>@<spec>/<gener
 opencode plugin update openchoreographer
 ```
 
-The package version is the only upgrade marker. Settings, model overrides, and the disabled-subagent list live in OpenCode's plugin storage and survive an upgrade.
+The package version is the only upgrade marker. Settings and model overrides live in OpenCode's plugin storage and survive an upgrade.
 
 ## Uninstall
 

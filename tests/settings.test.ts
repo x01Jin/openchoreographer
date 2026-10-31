@@ -4,9 +4,8 @@ import { defaultSettings, mergeSettings, normalizeSettings, normalizeSnapshot } 
 
 const DEFAULTS = {
   animations: { todo: true, running: true },
-  ui: { todos: true, roster: true },
+  ui: { todos: false, roster: true },
   models: { primary: {}, fallback: {} },
-  disabled: [],
   maxParallel: 4,
 }
 
@@ -21,6 +20,11 @@ describe("normalizeSettings", () => {
     assert.deepEqual(normalizeSettings({ animations: { todo: "yes", running: 1 } }).animations, { todo: true, running: true })
   })
 
+  test("keeps the TODO panel off unless the user turned it on", () => {
+    assert.equal(normalizeSettings({}).ui.todos, false)
+    assert.equal(normalizeSettings({ ui: { todos: true } }).ui.todos, true)
+  })
+
   test("normalizes primary and fallback model references", () => {
     const settings = normalizeSettings({
       models: {
@@ -32,10 +36,6 @@ describe("normalizeSettings", () => {
     assert.deepEqual(settings.models.fallback, { backend: ["opencode/small"], reviewer: [] })
   })
 
-  test("keeps only known subagent ids in disabled", () => {
-    assert.deepEqual(normalizeSettings({ disabled: ["writer", "writer", "orchestrator", "nope", 3] }).disabled, ["writer"])
-  })
-
   test("clamps maxParallel", () => {
     assert.equal(normalizeSettings({ maxParallel: 0 }).maxParallel, 1)
     assert.equal(normalizeSettings({ maxParallel: 99 }).maxParallel, 8)
@@ -43,53 +43,37 @@ describe("normalizeSettings", () => {
     assert.equal(normalizeSettings({ maxParallel: "4" }).maxParallel, 4)
   })
 
-  test("ignores legacy steps keys", () => {
-    assert.deepEqual(normalizeSettings({ steps: { backend: 30 } }), DEFAULTS)
-  })
 })
 
 describe("normalizeSnapshot", () => {
   const base = {
     animations: { todo: true, running: true },
-    ui: { todos: true, roster: true },
-    managed: ["orchestrator", "backend"],
+    ui: { todos: false, roster: true },
     models: { primary: { backend: "opencode/big" }, fallback: {} },
     configured: { backend: "opencode/big" },
     subagents: ["backend"],
-    disabled: ["writer"],
     maxParallel: 2,
     routing: { backend: { model: "opencode/big", fallback: false } },
   }
 
   test("accepts a complete snapshot", () => {
-    const snapshot = normalizeSnapshot(base)
-    assert.deepEqual(snapshot, {
+    assert.deepEqual(normalizeSnapshot(base), {
       animations: base.animations,
       ui: base.ui,
-      managed: base.managed,
       models: { primary: { backend: "opencode/big" }, fallback: {} },
       configured: { backend: "opencode/big" },
       subagents: ["backend"],
-      disabled: ["writer"],
       maxParallel: 2,
       routing: { backend: { model: "opencode/big", fallback: false } },
     })
   })
 
-  test("rejects a snapshot without animations or managed", () => {
+  test("rejects a snapshot without animations", () => {
     assert.equal(normalizeSnapshot({ ...base, animations: null }), undefined)
-    assert.equal(normalizeSnapshot({ ...base, managed: undefined }), undefined)
-  })
-
-  test("ignores legacy steps and defaults fields", () => {
-    const snapshot = normalizeSnapshot({ ...base, steps: { backend: 30 }, defaults: { backend: 30 } })
-    assert.ok(snapshot !== undefined)
-    assert.ok(!("steps" in snapshot))
-    assert.ok(!("defaults" in snapshot))
   })
 
   test("sanitizes prototype keys in routing and configured", () => {
-    const parsed = JSON.parse('{"animations":{"todo":true,"running":true},"ui":{"todos":true,"roster":true},"managed":[],"routing":{"__proto__":{"model":"a/b","fallback":true},"backend":{"model":"a/b","fallback":false}},"configured":{"__proto__":"a/b","backend":"a/b"}}')
+    const parsed = JSON.parse('{"animations":{"todo":true,"running":true},"ui":{"todos":false,"roster":true},"routing":{"__proto__":{"model":"a/b","fallback":true},"backend":{"model":"a/b","fallback":false}},"configured":{"__proto__":"a/b","backend":"a/b"}}')
     const snapshot = normalizeSnapshot(parsed)
     assert.ok(snapshot !== undefined)
     assert.deepEqual(Object.keys(snapshot.routing), ["backend"])
@@ -100,16 +84,15 @@ describe("normalizeSnapshot", () => {
 describe("mergeSettings", () => {
   test("patches known fields and leaves the input untouched", () => {
     const current = defaultSettings()
-    const patch = { animations: { todo: false }, ui: { roster: false }, maxParallel: 6, disabled: ["writer"] }
+    const patch = { animations: { todo: false }, ui: { roster: false }, maxParallel: 6 }
     const merged = mergeSettings(current, patch)
     assert.deepEqual(merged, {
       animations: { todo: false, running: true },
-      ui: { todos: true, roster: false },
+      ui: { todos: false, roster: false },
       models: { primary: {}, fallback: {} },
-      disabled: ["writer"],
       maxParallel: 6,
     })
-    assert.deepEqual(patch, { animations: { todo: false }, ui: { roster: false }, maxParallel: 6, disabled: ["writer"] })
+    assert.deepEqual(patch, { animations: { todo: false }, ui: { roster: false }, maxParallel: 6 })
   })
 
   test("null clears a model override and a maxParallel override", () => {
@@ -124,15 +107,9 @@ describe("mergeSettings", () => {
     assert.deepEqual(merged.models, { primary: {}, fallback: {} })
   })
 
-  test("ignores a legacy steps patch", () => {
-    const merged = mergeSettings(defaultSettings(), { steps: { backend: 40 } })
-    assert.ok(!("steps" in merged))
-  })
-
   test("ignores prototype pollution", () => {
-    const patch = JSON.parse('{"models":{"primary":{"__proto__":"a/b","constructor":"a/b"}},"disabled":["__proto__"]}')
+    const patch = JSON.parse('{"models":{"primary":{"__proto__":"a/b","constructor":"a/b"}}}')
     const merged = mergeSettings(defaultSettings(), patch)
     assert.deepEqual(merged.models.primary, {})
-    assert.deepEqual(merged.disabled, [])
   })
 })

@@ -3,15 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, TEAM_IDS, WORKER_IDS } from "../src/shared/agents";
-import {
-  ORCHESTRATOR_RULE_LINES,
-  parseAgentMarkdown,
-  pruneOrchestratorSystem,
-  readAgentDefinitions,
-  registerChoreographerAgents,
-  rewriteTeamLine,
-} from "../src/server/agent-source";
+import { AGENT_IDS, EXPLORE_ID, MODEL_GROUPS, ORCHESTRATOR_ID, REVIEWER_IDS, SPECIALIST_IDS, SUBAGENT_IDS, WORKER_IDS } from "../src/shared/agents";
+import { parseAgentMarkdown, readAgentDefinitions, registerChoreographerAgents } from "../src/server/agent-source";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AGENTS_DIR = path.join(REPO_ROOT, "agents");
@@ -47,7 +40,7 @@ describe("agents", () => {
     const orchestrator = readAgent("orchestrator.md");
     assert.ok(orchestrator.includes("scope correction"), "orchestrator.md treats a refusal as a scope correction");
     assert.ok(orchestrator.includes("task attempted to override role scope"), "orchestrator.md stops on an override refusal");
-    assert.ok(orchestrator.includes("do not retry"), "orchestrator.md does not retry an override refusal");
+    assert.ok(orchestrator.includes("Send the task to the named role once"), "orchestrator.md hands a scope refusal to the named role once");
   });
   test("MODEL_GROUPS covers every subagent exactly once", () => {
     assert.deepStrictEqual([...SUBAGENT_IDS], AGENT_IDS.filter((id) => id !== ORCHESTRATOR_ID), "SUBAGENT_IDS is AGENT_IDS without the orchestrator, in order");
@@ -89,40 +82,8 @@ describe("bundled definitions", () => {
   });
 });
 
-describe("ORCHESTRATOR_RULE_LINES", () => {
-  test("every pruned rule appears as a full line in the real orchestrator", () => {
-    const system = readAgent("orchestrator.md");
-    for (const rule of ORCHESTRATOR_RULE_LINES) {
-      assert.ok(system.split(/\r?\n/).includes(rule), `orchestrator.md is missing the pruned rule: ${rule}`);
-    }
-  });
-});
-
-describe("prompt pruning", () => {
-  const orchestrator = readAgentDefinitions().find((definition) => definition.id === ORCHESTRATOR_ID)?.system ?? "";
-  test("removes the rules for disabled agents", () => {
-    const pruned = pruneOrchestratorSystem(orchestrator, ["designer", "writer", "explore", "reviewer-scope", "reviewer-plan", "reviewer-execution"]);
-    for (const rule of ORCHESTRATOR_RULE_LINES) assert.ok(!pruned.includes(rule), `rule survived pruning: ${rule}`);
-    assert.ok(!pruned.includes("Plan stage, before the first delegation:"));
-    assert.ok(!pruned.includes("spawn `explore`"));
-  });
-  test("keeps every rule when nothing is disabled", () => {
-    assert.equal(pruneOrchestratorSystem(orchestrator, []), orchestrator);
-  });
-  test("rewrites the Team line to enabled ids and restores it", () => {
-    const full = readAgent("backend.md");
-    const pruned = rewriteTeamLine(full, ["writer"]);
-    assert.ok(pruned.includes("Team: backend, frontend, database, devops, tester, designer, explore."));
-    assert.ok(!pruned.includes("writer."));
-    assert.equal(rewriteTeamLine(pruned, []), full);
-  });
-  test("TEAM_IDS holds the eight team ids in order", () => {
-    assert.deepStrictEqual([...TEAM_IDS], ["backend", "frontend", "database", "devops", "tester", "designer", "writer", "explore"]);
-  });
-});
-
 describe("registration", () => {
-  test("adds every bundled agent and drops disabled ids", async () => {
+  test("adds every bundled agent and clears retired ids", async () => {
     const agents = new Map<string, any>();
     const editor = {
       list: () => [...agents.values()],
@@ -145,11 +106,10 @@ describe("registration", () => {
         },
       },
     };
-    await registerChoreographerAgents(context as never, () => ["writer"]);
-    assert.equal(agents.size, AGENT_IDS.length - 1);
-    assert.ok(!agents.has("writer"));
-    assert.ok(agents.has("backend"));
-    assert.ok(!String(agents.get("orchestrator")?.system).includes("Use `writer`"));
-    assert.ok(!String(agents.get("backend")?.system).includes("writer."));
+    agents.set("reviewer-general", { name: "reviewer-general", permissions: [] });
+    await registerChoreographerAgents(context as never);
+    assert.equal(agents.size, AGENT_IDS.length);
+    assert.ok(!agents.has("reviewer-general"));
+    for (const id of AGENT_IDS) assert.ok(agents.has(id), `${id} registered`);
   });
 });

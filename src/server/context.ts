@@ -5,21 +5,18 @@ import { clipSubagentReports } from "../shared/results"
 import { PARALLEL_DEFAULT } from "../shared/settings"
 import { buildDelegationText } from "../shared/review"
 
-export function contextHook(ctx: Plugin.Context, options: Options, getDisabled: () => readonly string[] = () => [], getMaxParallel: () => number = () => PARALLEL_DEFAULT) {
+export function contextHook(ctx: Plugin.Context, options: Options, getMaxParallel: () => number = () => PARALLEL_DEFAULT) {
   return ctx.session.hook("context", (event) => {
     if (event.agent === options.agent) {
       event.system.push({
         type: "text",
-        text: `TODO discipline:
-- Write the list before the first tool call; each item is one verifiable action phrased as the action.
-- At each step transition, in one write mark the finished item completed and the next in_progress, adding a mid-task step there too; never batch completions to the end.
-- Never end a turn with an item pending or in_progress unless blocked, and say what blocks it.`,
+        text: `TODO discipline: write the list before the first tool call, update it at each step transition, and never end a turn with pending work unless blocked.`,
       })
       delete event.tools.edit
       delete event.tools.write
       delete event.tools.patch
       delete event.tools.shell
-      event.system.push({ type: "text", text: buildDelegationText(options, getDisabled(), getMaxParallel()) })
+      event.system.push({ type: "text", text: buildDelegationText(options, getMaxParallel()) })
 
       try {
         const clipped = clipSubagentReports(event.messages)

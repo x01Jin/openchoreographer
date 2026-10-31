@@ -8,6 +8,6 @@ There is one plugin command plus a settings shortcut. `/review-panel` switches t
 
 The roster is one primary agent and thirteen subagents. The orchestrator (`mode: primary`) plans, delegates, and verifies. Eight worker-group agents do the work: `explore` (read-only recon), five domain workers, `designer`, and `writer`. Five reviewers are read-only. See [roster](roster.md) for the full table.
 
-Subagent results are clipped before the orchestrator sees them. A foreground result over 4000 characters keeps its head and tail with a marker giving the dropped character count, applied per text part. The worker return contract puts TASK and FILES at the top and the verdict at the bottom.
+Subagent results are clipped before the orchestrator sees them. A foreground result over 3000 characters keeps its head and tail with a marker giving the dropped character count, applied per text part. The worker return contract puts TASK and FILES at the top and the verdict at the bottom.
 
-State lives in two places. Model overrides, fallbacks, UI settings, and the disabled-subagent list live in the plugin's settings storage. Todo lists live in the current session's metadata under `openchoreographer.todos`.
+State lives in two places. Model overrides, fallbacks, and UI settings live in the plugin's settings storage. Todo lists live in the current session's metadata under `openchoreographer.todos`. The TODO panel is off by default.

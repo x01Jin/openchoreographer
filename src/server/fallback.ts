@@ -39,7 +39,7 @@ export function retryHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   })
 }
 
-export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSettings, getDisabled: () => readonly string[] = () => []) {
+export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.tool.hook("execute.before", async (event) => {
     if (event.tool !== "subagent") return
     if (typeof event.input !== "object" || event.input === null) return
@@ -47,7 +47,6 @@ export function subagentBeforeHook(ctx: Plugin.Context, getModels: () => ModelSe
     const record = event.input as Record<string, unknown>
     if (typeof record.agent !== "string") return
     const agent = record.agent
-    if (getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
     const overrides = getModels()
     const alternates = resolveFallbacks(agent, overrides)
     const configured = await resolvePrimary(ctx, agent, overrides)
@@ -113,7 +112,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings, getDisabled: () => readonly string[] = () => []) {
+export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSettings) {
   return ctx.tool.transform((editor) => {
     const target = editor.get("subagent")
     if (target === undefined || typeof target.execute !== "function") return
@@ -123,7 +122,6 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
         // The subagent input shape is host-defined, so narrow it once to read fields.
         const fields = input as Record<string, unknown>
         const agent = typeof fields.agent === "string" ? fields.agent : undefined
-        if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
         const startedAt = Date.now()
         const overrides = getModels()
         const alternatesForAgent = agent !== undefined ? resolveFallbacks(agent, overrides) : []
@@ -167,8 +165,7 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
                 }
               }
               const next = formatModelRef(alternate)
-              if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
-              try {
+                    try {
                 const retried = await original({ ...fields, model: next }, context)
                 const settled = planRetriedResult({ result: retried, alternate })
                 if (settled.fail !== undefined) health.fail(settled.fail, "quota")
@@ -184,7 +181,6 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
           if (!aborted && !failedResult && actual !== undefined) health.succeed(actual, startedAt)
           return result
         } catch (error) {
-          if (agent !== undefined && getDisabled().includes(agent)) throw error
           // A cancelled child is not a provider failure; retrying would ignore the abort.
           if (context.signal.aborted) throw error
           const message = errorMessage(error)
@@ -209,8 +205,7 @@ export function subagentTransform(ctx: Plugin.Context, getModels: () => ModelSet
             }
           }
           const alternate = formatModelRef(choice.model)
-          if (agent !== undefined && getDisabled().includes(agent)) throw new Error(`openchoreographer: subagent "${agent}" is disabled in /choreographer; enable it there or delegate to an enabled agent`)
-          try {
+            try {
             const result = await original({ ...fields, model: alternate }, context)
             health.succeed(choice.model, startedAt)
             return result
