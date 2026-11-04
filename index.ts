@@ -14,18 +14,14 @@ import { contextHook } from "./src/server/context"
 import { health, onHealthChange, retryHook, subagentAfterHook, subagentBeforeHook, subagentTransform } from "./src/server/fallback"
 import { outputClipHook } from "./src/server/output"
 
-type Registration = { dispose: () => Promise<void> }
+import { createRegistrationScope, type Registration } from "./src/server/lifecycle"
 
-let active: Registration[] = []
-let epoch = 0
+const scope = createRegistrationScope()
 
 export default Plugin.define({
   id: "openchoreographer",
   async setup(ctx) {
-    const generation = ++epoch
-    const previous = active
-    active = []
-    await Promise.allSettled(previous.map((registration) => registration.dispose()))
+    const handle = await scope.take(ctx.location)
     const options = normalizeOptions(ctx.options)
     if (typeof ctx.options === "object" && ctx.options !== null && Object.prototype.hasOwnProperty.call(ctx.options, "fallback")) {
       console.warn('openchoreographer: the "fallback" plugin option is ignored; configure fallback models in /choreographer')
@@ -194,7 +190,7 @@ export default Plugin.define({
 
       registrations.push(await contextHook(ctx, options, () => settings.current.maxParallel))
 
-      if (generation !== epoch) {
+      if (!scope.install(handle, registrations)) {
         const stale = [...registrations].reverse()
         registrations.length = 0
         if (healthTimer !== undefined) {
@@ -205,7 +201,6 @@ export default Plugin.define({
         await Promise.allSettled(stale.map((registration) => registration.dispose()))
         return
       }
-      active = registrations
       return async () => {
         disposed = true
         if (healthTimer !== undefined) {
@@ -215,9 +210,7 @@ export default Plugin.define({
         clearExpiryTimer()
         const pending = [...registrations].reverse()
         registrations.length = 0
-        if (active === registrations) {
-          active = []
-        }
+        scope.forget(handle, registrations)
         for (const [index, registration] of pending.entries()) {
           try {
             await registration.dispose()
