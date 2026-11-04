@@ -202,7 +202,7 @@ export function Sidebar(props: SidebarProps) {
           <For each={props.run()}>{(session) => runningRow(session)}</For>
         </box>
       </Show>
-      <Show when={(props.settings.ui?.todos ?? true) && props.todoItems().length > 0}>
+      <Show when={(props.settings.ui?.todos ?? false) && props.todoItems().length > 0}>
         <box flexDirection="column" width="100%" marginTop={1}>
           {header("todos", "TODOS", () => `${props.todoDone()}/${props.todoItems().length}`)}
           <Show when={props.isOpen("todos")}><For each={props.todoItems().slice(0, TODO_LIMIT)}>{(item, index) => todoRow(item, index())}</For></Show>

@@ -101,7 +101,7 @@ export function SettingsPanel(props) {
     }, {
       kind: "ui",
       key: "todos",
-      label: "TODO panel"
+      label: "TODO list"
     }, {
       kind: "ui",
       key: "roster",

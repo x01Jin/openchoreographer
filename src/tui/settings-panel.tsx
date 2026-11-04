@@ -107,7 +107,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     const list: SettingsRow[] = [
       { kind: "animation", key: "todo", label: "TODO animations" },
       { kind: "animation", key: "running", label: "RUNNING animations" },
-      { kind: "ui", key: "todos", label: "TODO panel" },
+      { kind: "ui", key: "todos", label: "TODO list" },
       { kind: "ui", key: "roster", label: "Agent roster" },
       { kind: "maxParallel", label: "Max parallel" },
     ]

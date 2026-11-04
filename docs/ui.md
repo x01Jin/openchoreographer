@@ -6,7 +6,7 @@ The sidebar shows an `AGENTS & MODELS` block with three sections. `PRIMARY` list
 
 The `PRIMARY` section also lists the running sessions and their current step position. The model column stays 15 cells wide and truncates, with the `↳ ` prefix counted inside the width.
 
-Two switches control what is visible. The `TODO panel` switch shows the TODOS section; it is off by default. `todowrite` and `todoread` still work while it is hidden, so the list returns intact when it is turned on. The `Agent roster` switch hides the AGENTS & MODELS block; the RUNNING list stays. Both are stored in the plugin's settings.
+Two switches control what is visible. The `TODO list` switch is off by default. While it is off, `todowrite` and `todoread` are not offered to any agent, the orchestrator gets no TODO discipline instruction, and the TODOS section stays hidden. The stored list is kept and returns intact when the switch is turned back on. While it is on, the tools are available to every agent, the orchestrator gets the TODO discipline line, and the TODOS section appears. The change applies immediately without a reload. The `Agent roster` switch hides the AGENTS & MODELS block; the RUNNING list stays. Both are stored in the plugin's settings.
 
 The TODO header animates with a flowing label every 220 ms; with animations off the header is a solid color. Turning an animation off stops its timer.
 

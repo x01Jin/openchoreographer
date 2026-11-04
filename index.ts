@@ -188,7 +188,7 @@ export default Plugin.define({
 
       registrations.push(await commands(ctx, options))
 
-      registrations.push(await contextHook(ctx, options, () => settings.current.maxParallel))
+      registrations.push(await contextHook(ctx, options, () => settings.current.maxParallel, () => settings.current.ui.todos))
 
       if (!scope.install(handle, registrations)) {
         const stale = [...registrations].reverse()

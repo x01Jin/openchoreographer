@@ -1,6 +1,6 @@
 # Other tools
 
-`todowrite` replaces the session's todo list and returns per-status counts as JSON. `todoread` returns the session's todo list as JSON, or an empty list when unset. Both work on the current session only.
+`todowrite` replaces the session's todo list and returns per-status counts as JSON. `todoread` returns the session's todo list as JSON, or an empty list when unset. Both work on the current session only. They are only offered while the `TODO list` switch is on.
 
 The list lives in the session's metadata under `openchoreographer.todos`. Each item needs a non-empty `content` (at most 500 characters) and a `status` of `pending`, `in_progress`, `completed`, or `cancelled`; an optional `priority` is one of `high`, `medium`, or `low`. An `id` is generated when omitted. A list holds at most 200 items.
 

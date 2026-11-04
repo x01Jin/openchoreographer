@@ -5,13 +5,19 @@ import { clipSubagentReports } from "../shared/results"
 import { PARALLEL_DEFAULT } from "../shared/settings"
 import { buildDelegationText } from "../shared/review"
 
-export function contextHook(ctx: Plugin.Context, options: Options, getMaxParallel: () => number = () => PARALLEL_DEFAULT) {
+export function contextHook(ctx: Plugin.Context, options: Options, getMaxParallel: () => number = () => PARALLEL_DEFAULT, todosEnabled: () => boolean = () => false) {
   return ctx.session.hook("context", (event) => {
+    if (!todosEnabled()) {
+      delete event.tools.todowrite
+      delete event.tools.todoread
+    }
     if (event.agent === options.agent) {
-      event.system.push({
-        type: "text",
-        text: `TODO discipline: write the list before the first tool call, update it at each step transition, and never end a turn with pending work unless blocked.`,
-      })
+      if (todosEnabled()) {
+        event.system.push({
+          type: "text",
+          text: `TODO discipline: write the list before the first tool call, update it at each step transition, and never end a turn with pending work unless blocked.`,
+        })
+      }
       delete event.tools.edit
       delete event.tools.write
       delete event.tools.patch

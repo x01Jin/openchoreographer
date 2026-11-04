@@ -10,4 +10,4 @@ The roster is one primary agent and thirteen subagents. The orchestrator (`mode:
 
 Subagent results are clipped before the orchestrator sees them. A foreground result over 3000 characters keeps its head and tail with a marker giving the dropped character count, applied per text part. The worker return contract puts TASK and FILES at the top and the verdict at the bottom.
 
-State lives in two places. Model overrides, fallbacks, and UI settings live in the plugin's settings storage. Todo lists live in the current session's metadata under `openchoreographer.todos`. The TODO panel is off by default.
+State lives in two places. Model overrides, fallbacks, and UI settings live in the plugin's settings storage. Todo lists live in the current session's metadata under `openchoreographer.todos`. The TODO list switch is off by default.

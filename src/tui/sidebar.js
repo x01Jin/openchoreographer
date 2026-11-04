@@ -357,7 +357,7 @@ export function Sidebar(props) {
     }), null);
     _$insert(_el$19, _$createComponent(Show, {
       get when() {
-        return _$memo(() => !!(props.settings.ui?.todos ?? true))() && props.todoItems().length > 0;
+        return _$memo(() => !!(props.settings.ui?.todos ?? false))() && props.todoItems().length > 0;
       },
       get children() {
         var _el$25 = _$createElement("box");
